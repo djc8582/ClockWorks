@@ -1,11 +1,8 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { COLORS, TIMBRES, DRUM_TIMBRES } from '../constants.js';
+import { COLORS, TIMBRES } from '../constants.js';
 import { updateState } from '../state.js';
 import { swapTimbre, rescheduleAll } from '../audio/audioEngine.js';
-
-// Filter out drum timbres
-const MELODIC_TIMBRES = TIMBRES.filter(t => !DRUM_TIMBRES.has(t.id));
 
 export default function TimbreRow({ shape, color }) {
   if (!shape) return null;
@@ -23,7 +20,7 @@ export default function TimbreRow({ shape, color }) {
   return (
     <View style={styles.container}>
       <View style={styles.timbres}>
-        {MELODIC_TIMBRES.map(t => {
+        {TIMBRES.map(t => {
           const active = t.id === shape.timbre;
           return (
             <Pressable

@@ -79,7 +79,7 @@ export default function PanelHeader({ shape, color }) {
       if (sc.shapes.length === 0) {
         const newId = generateShapeId();
         sc.shapes.push({
-          id: newId, sides: 3, colorIndex: 0, timbre: "classic", subdivision: 1,
+          id: newId, sides: 3, colorIndex: 0, timbre: "bell", subdivision: 1,
           vertices: [
             { pitches: [60], velocity: 100, muted: false, subs: [] },
             { pitches: [64], velocity: 85, muted: false, subs: [] },

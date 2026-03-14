@@ -66,7 +66,7 @@ function updateBPM(newBPM) {
 // ── Synth management ─────────────────────────────────────────
 function ensureSynth(shape) {
   if (!audioContext) return null;
-  const timbre = shape.timbre || 'classic';
+  const timbre = shape.timbre || 'bell';
   let synth = synthMap.get(timbre);
   if (!synth) {
     synth = createTimbre(audioContext, timbre);
@@ -78,7 +78,7 @@ function ensureSynth(shape) {
 function swapTimbre(shape) { ensureSynth(shape); }
 
 function cleanupOrphanedSynths() {
-  const usedTimbres = new Set(getShapes().map(s => s.timbre || 'classic'));
+  const usedTimbres = new Set(getShapes().map(s => s.timbre || 'bell'));
   for (const [timbre] of synthMap) {
     if (!usedTimbres.has(timbre)) synthMap.delete(timbre);
   }

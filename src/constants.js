@@ -93,17 +93,14 @@ export const MAX_SUBDIVISION = 4;
 
 // ── Timbres ───────────────────────────────────────────────────
 export const TIMBRES = [
-  { id: "classic",  label: "Classic",  icon: "1" },
-  { id: "bright",   label: "Bright",   icon: "2" },
-  { id: "wurly",    label: "Wurly",    icon: "3" },
-  { id: "crystal",  label: "Crystal",  icon: "4" },
-  { id: "soft",     label: "Soft",     icon: "5" },
-  { id: "kick",     label: "Kick",     icon: "K" },
-  { id: "snare",    label: "Snare",    icon: "S" },
-  { id: "hihat",    label: "Hi-Hat",   icon: "H" },
+  { id: "bell",   label: "Bell",   icon: "1" },
+  { id: "keys",   label: "Keys",   icon: "2" },
+  { id: "pad",    label: "Pad",    icon: "3" },
+  { id: "pluck",  label: "Pluck",  icon: "4" },
+  { id: "glass",  label: "Glass",  icon: "5" },
 ];
 
-export const DRUM_TIMBRES = new Set(["kick", "snare", "hihat"]);
+export const DRUM_TIMBRES = new Set([]);
 
 export const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 

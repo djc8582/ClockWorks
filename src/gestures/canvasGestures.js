@@ -100,10 +100,10 @@ export function addNewShape(sides) {
 
   const newColor = getNextColorIndex(shapes);
 
-  const lastTimbre = shapes.length > 0 ? shapes[shapes.length - 1].timbre : 'classic';
+  const lastTimbre = shapes.length > 0 ? shapes[shapes.length - 1].timbre : 'bell';
   const melodicTimbres = TIMBRES.map(t => t.id).filter(t => !DRUM_TIMBRES.has(t));
   const availableTimbres = melodicTimbres.filter(t => t !== lastTimbre);
-  const newTimbre = availableTimbres[0] || 'classic';
+  const newTimbre = availableTimbres[0] || 'bell';
 
   const newId = generateShapeId();
   const vertices = [];

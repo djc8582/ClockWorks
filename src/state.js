@@ -15,7 +15,7 @@ function createDefaultState() {
             id: "shape-1",
             sides: 3,
             colorIndex: 0,
-            timbre: "classic",
+            timbre: "bell",
             subdivision: 1,
             vertices: [
               { pitches: [60], velocity: 100, muted: false, subs: [] },
