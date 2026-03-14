@@ -1,6 +1,4 @@
-// Ultra-simple timbre system.
-// No AudioParam scheduling — just .value and setTimeout.
-// This matches the pattern that produced the working test beep.
+// Timbre system — one-shot oscillators with simple fade envelope.
 
 const TIMBRE_CONFIGS = {
   classic: { oscType: 'sine', volume: 0.25 },
@@ -19,12 +17,16 @@ function createTimbre(ctx, timbreId) {
   return { config, timbreId, dispose() {} };
 }
 
-// Play a note RIGHT NOW using the simplest possible approach.
-// No future scheduling, no AudioParam automation.
 function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration) {
   const config = synth.config;
   const pitches = stepData.pitches || [60];
   const vol = config.volume * velocity;
+  const now = ctx.currentTime;
+
+  // Fade times to prevent clicks
+  const fadeIn = 0.015;
+  const fadeOut = 0.04;
+  const stopTime = now + duration + fadeOut + 0.01;
 
   for (const pitch of pitches) {
     const osc = ctx.createOscillator();
@@ -32,14 +34,18 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration) {
 
     osc.type = config.oscType;
     osc.frequency.value = midiToFreq(pitch);
-    gain.gain.value = vol;
+
+    // Start silent, fade in, hold, fade out
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(vol, now + fadeIn);
+    gain.gain.setValueAtTime(vol, now + duration);
+    gain.gain.linearRampToValueAtTime(0.0001, now + duration + fadeOut);
 
     osc.connect(gain);
     gain.connect(masterGain);
 
-    const now = ctx.currentTime;
     osc.start(now);
-    osc.stop(now + duration);
+    osc.stop(stopTime);
   }
 }
 
