@@ -1,41 +1,41 @@
-// Custom transport loop — replaces Tone.Transport.
-// Uses setInterval(25ms) on JS thread with 100ms lookahead.
-// Events are scheduled against audioContext.currentTime so they play
-// precisely on the native audio thread regardless of JS jitter.
+// Pre-scheduling transport — schedules entire cycles of notes ahead of time.
+// Instead of per-tick note creation (fragile under JS thread pressure),
+// this schedules all oscillators for a full cycle at once using
+// osc.start(absoluteTime). The tick only needs to detect cycle boundaries.
 
 export function createScheduler(audioContext, cycleDuration, onTick) {
   let interval = null;
   let running = false;
-  let loopStart = 0;
-  let absoluteStart = 0; // Never changes — used for monotonic cycle numbers
+  let startTime = 0;
   let _cycleDuration = cycleDuration;
-  const INTERVAL_MS = 25;
-  const LOOKAHEAD_S = 0.1;
+  let lastScheduledCycle = -1;
+  const INTERVAL_MS = 50;
+  const SCHEDULE_AHEAD = 2; // Schedule 2 cycles ahead
 
   function tick() {
     if (!running) return;
     const now = audioContext.currentTime;
+    const currentCycle = Math.floor((now - startTime) / _cycleDuration);
 
-    // Advance loopStart BEFORE tick so loop position is correct
-    const elapsed = now - loopStart;
-    if (elapsed >= _cycleDuration) {
-      const cyclesToAdvance = Math.floor(elapsed / _cycleDuration);
-      loopStart += cyclesToAdvance * _cycleDuration;
-    }
-
-    const lookAheadEnd = now + LOOKAHEAD_S;
-    if (onTick) {
-      onTick(now, lookAheadEnd);
+    // Schedule upcoming cycles
+    for (let c = currentCycle; c <= currentCycle + SCHEDULE_AHEAD; c++) {
+      if (c > lastScheduledCycle) {
+        lastScheduledCycle = c;
+        const cycleStart = startTime + c * _cycleDuration;
+        if (onTick) {
+          onTick(cycleStart, c);
+        }
+      }
     }
   }
 
   function start() {
     if (running) return;
     running = true;
-    const now = audioContext.currentTime;
-    loopStart = now;
-    absoluteStart = now;
+    startTime = audioContext.currentTime;
+    lastScheduledCycle = -1;
     interval = setInterval(tick, INTERVAL_MS);
+    tick(); // Immediately schedule first cycles
   }
 
   function stop() {
@@ -48,21 +48,25 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
 
   function setCycleDuration(dur) {
     _cycleDuration = dur;
+    // Reset scheduling on tempo change
+    lastScheduledCycle = -1;
   }
 
   function getLoopPosition(currentTime) {
-    const elapsed = currentTime - loopStart;
+    const elapsed = currentTime - startTime;
     return ((elapsed % _cycleDuration) + _cycleDuration) % _cycleDuration;
   }
 
-  // Monotonically increasing cycle number — never resets
   function getCycleNumber(currentTime) {
-    const totalElapsed = currentTime - absoluteStart;
-    return Math.floor(totalElapsed / _cycleDuration);
+    return Math.floor((currentTime - startTime) / _cycleDuration);
   }
 
   function getSeconds() {
     return getLoopPosition(audioContext.currentTime);
+  }
+
+  function getStartTime() {
+    return startTime;
   }
 
   return {
@@ -72,5 +76,6 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
     getLoopPosition,
     getCycleNumber,
     getSeconds,
+    getStartTime,
   };
 }

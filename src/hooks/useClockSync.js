@@ -3,16 +3,18 @@ import { isAudioInitialized, getTransportSeconds, getCycleDuration } from '../au
 import { updateSequencer } from '../sequencer.js';
 
 // Drives the clock angle from audio transport time.
-// Returns the current angle (~60fps updates).
-// NOTE: This hook should only be used in CanvasView to avoid
-// triggering full-tree re-renders at 60fps.
+// Updates at ~30fps to reduce JS thread pressure.
 export function useClockSync() {
   const [clockAngle, setClockAngle] = useState(-Math.PI / 2);
   const rafId = useRef(null);
+  const frameCount = useRef(0);
 
   useEffect(() => {
     function tick() {
-      if (isAudioInitialized()) {
+      frameCount.current++;
+
+      // Update every 2nd frame (~30fps) to reduce JS thread load
+      if (frameCount.current % 2 === 0 && isAudioInitialized()) {
         const t = getTransportSeconds();
         const cd = getCycleDuration();
         if (cd > 0) {
