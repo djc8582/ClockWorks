@@ -113,9 +113,9 @@ function onSchedulerTick(loopPos, now) {
         if (diff > cycleDuration / 2) diff -= cycleDuration;
 
         if (diff >= 0 && diff < window) {
-          // Check if already fired recently
-          const lastFire = lastFireTimes[eventKey] || 0;
-          if (now - lastFire < cycleDuration * 0.5) continue;
+          // Dedup: skip if this event already fired within 50ms
+          const lastFire = lastFireTimes[eventKey];
+          if (lastFire !== undefined && now - lastFire < 0.08) continue;
           lastFireTimes[eventKey] = now;
 
           const v = shape.vertices[i];

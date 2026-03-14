@@ -3,18 +3,14 @@ import { isAudioInitialized, getTransportSeconds, getCycleDuration } from '../au
 import { updateSequencer } from '../sequencer.js';
 
 // Drives the clock angle from audio transport time.
-// Updates at ~30fps to reduce JS thread pressure.
+// Full 60fps for tight visual-audio sync.
 export function useClockSync() {
   const [clockAngle, setClockAngle] = useState(-Math.PI / 2);
   const rafId = useRef(null);
-  const frameCount = useRef(0);
 
   useEffect(() => {
     function tick() {
-      frameCount.current++;
-
-      // Update every 2nd frame (~30fps) to reduce JS thread load
-      if (frameCount.current % 2 === 0 && isAudioInitialized()) {
+      if (isAudioInitialized()) {
         const t = getTransportSeconds();
         const cd = getCycleDuration();
         if (cd > 0) {
