@@ -1,4 +1,7 @@
-// Timbre system — one-shot oscillators with simple fade envelope.
+// Timbre system — one-shot oscillators.
+// AudioParam scheduling (linearRamp, exponentialRamp) does NOT work
+// reliably in react-native-audio-api v0.5. Use direct .value assignment
+// and JS setTimeout for fade-out (matches the working test beep pattern).
 
 const TIMBRE_CONFIGS = {
   classic: { oscType: 'sine', volume: 0.25 },
@@ -22,11 +25,7 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration) {
   const pitches = stepData.pitches || [60];
   const vol = config.volume * velocity;
   const now = ctx.currentTime;
-
-  // Fade times to prevent clicks
-  const fadeIn = 0.015;
-  const fadeOut = 0.04;
-  const stopTime = now + duration + fadeOut + 0.01;
+  const durMs = duration * 1000;
 
   for (const pitch of pitches) {
     const osc = ctx.createOscillator();
@@ -34,18 +33,19 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration) {
 
     osc.type = config.oscType;
     osc.frequency.value = midiToFreq(pitch);
-
-    // Start silent, fade in, hold, fade out
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.linearRampToValueAtTime(vol, now + fadeIn);
-    gain.gain.setValueAtTime(vol, now + duration);
-    gain.gain.linearRampToValueAtTime(0.0001, now + duration + fadeOut);
+    gain.gain.value = vol;
 
     osc.connect(gain);
     gain.connect(masterGain);
-
     osc.start(now);
-    osc.stop(stopTime);
+
+    // JS-based fade-out to prevent stop clicks
+    setTimeout(() => { gain.gain.value = vol * 0.3; }, Math.max(0, durMs - 40));
+    setTimeout(() => { gain.gain.value = vol * 0.05; }, Math.max(0, durMs - 15));
+    setTimeout(() => {
+      gain.gain.value = 0;
+      try { osc.stop(); } catch (e) {}
+    }, durMs + 5);
   }
 }
 
