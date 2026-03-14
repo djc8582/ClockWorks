@@ -1,33 +1,34 @@
 // Timbre system using one-shot oscillators per note.
 // react-native-audio-api does NOT support AudioNode.connect(AudioParam),
 // so FM/AM synthesis via modulation routing is impossible.
-// Instead, each note creates a fresh oscillator + gain with envelope scheduling.
+// Oscillators are started immediately with gain=0, then the envelope
+// controls when sound is actually heard (avoids relying on start(futureTime)).
 
 // ── Timbre definitions ──────────────────────────────────────
 const TIMBRE_CONFIGS = {
   classic: {
     oscType: 'sine',
-    volume: -8,
+    volume: -6,
     envelope: { attack: 0.005, decay: 0.3, sustain: 0.4, release: 0.8 },
   },
   bright: {
     oscType: 'sawtooth',
-    volume: -14,
+    volume: -12,
     envelope: { attack: 0.001, decay: 0.2, sustain: 0.3, release: 0.5 },
   },
   wurly: {
     oscType: 'triangle',
-    volume: -6,
+    volume: -4,
     envelope: { attack: 0.01, decay: 0.4, sustain: 0.35, release: 0.6 },
   },
   crystal: {
     oscType: 'square',
-    volume: -16,
+    volume: -14,
     envelope: { attack: 0.001, decay: 0.8, sustain: 0.1, release: 1.5 },
   },
   soft: {
     oscType: 'sine',
-    volume: -8,
+    volume: -6,
     envelope: { attack: 0.15, decay: 0.5, sustain: 0.6, release: 2.0 },
   },
 };
@@ -48,18 +49,13 @@ function createTimbre(ctx, timbreId) {
 
   const config = TIMBRE_CONFIGS[timbreId];
   if (!config) {
-    // Fallback to classic
     return createTimbre(ctx, 'classic');
   }
 
   const output = ctx.createGain();
   output.gain.value = dbToGain(config.volume);
 
-  return {
-    output,
-    timbreId,
-    dispose() {},
-  };
+  return { output, timbreId, dispose() {} };
 }
 
 function createDrumTimbre(ctx, timbreId) {
@@ -71,7 +67,7 @@ function createDrumTimbre(ctx, timbreId) {
   return { output, timbreId, dispose() {} };
 }
 
-// ── Trigger a note (one-shot oscillator per pitch) ──────────
+// ── Trigger a note ──────────────────────────────────────────
 function triggerTimbre(ctx, synth, timbreId, stepData, velocity, duration, time) {
   if (timbreId === 'kick') {
     triggerKick(ctx, synth, stepData, velocity, duration, time);
@@ -95,25 +91,32 @@ function triggerTimbre(ctx, synth, timbreId, stepData, velocity, duration, time)
     const envGain = ctx.createGain();
 
     osc.type = config.oscType;
-    osc.frequency.setValueAtTime(midiToFreq(pitch), time);
+    osc.frequency.value = midiToFreq(pitch);
 
-    // ADSR envelope scaled by velocity
+    // Start silent — envelope controls when sound is heard
+    envGain.gain.value = 0;
+
+    // Connect chain: osc → envGain → synth output
+    osc.connect(envGain);
+    envGain.connect(synth.output);
+
+    // Start oscillator immediately (don't rely on start(futureTime))
+    osc.start();
+
+    // Schedule ADSR envelope at the precise time
     envGain.gain.setValueAtTime(0.001, time);
     envGain.gain.linearRampToValueAtTime(velocity, time + env.attack);
     envGain.gain.linearRampToValueAtTime(
-      velocity * env.sustain,
+      Math.max(0.001, velocity * env.sustain),
       time + env.attack + env.decay
     );
 
     const releaseStart = time + duration;
-    envGain.gain.setValueAtTime(velocity * env.sustain, releaseStart);
+    envGain.gain.setValueAtTime(Math.max(0.001, velocity * env.sustain), releaseStart);
     envGain.gain.exponentialRampToValueAtTime(0.001, releaseStart + env.release);
 
-    osc.connect(envGain);
-    envGain.connect(synth.output);
-
-    osc.start(time);
-    osc.stop(releaseStart + env.release + 0.1);
+    // Stop oscillator after release
+    osc.stop(releaseStart + env.release + 0.2);
   }
 }
 
@@ -126,15 +129,17 @@ function triggerKick(ctx, synth, stepData, velocity, duration, time) {
   const basePitch = (stepData.pitches && stepData.pitches[0]) || 36;
   const baseFreq = midiToFreq(basePitch);
 
+  envGain.gain.value = 0;
+  osc.connect(envGain);
+  envGain.connect(synth.output);
+  osc.start();
+
   osc.frequency.setValueAtTime(baseFreq * 8, time);
-  osc.frequency.exponentialRampToValueAtTime(baseFreq, time + 0.05);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(baseFreq, 0.001), time + 0.05);
 
   envGain.gain.setValueAtTime(velocity, time);
   envGain.gain.exponentialRampToValueAtTime(0.001, time + duration);
 
-  osc.connect(envGain);
-  envGain.connect(synth.output);
-  osc.start(time);
   osc.stop(time + duration + 0.1);
 }
 
@@ -150,8 +155,7 @@ function triggerSnare(ctx, synth, velocity, duration, time) {
   source.buffer = buffer;
 
   const envGain = ctx.createGain();
-  envGain.gain.setValueAtTime(velocity, time);
-  envGain.gain.exponentialRampToValueAtTime(0.001, time + duration);
+  envGain.gain.value = 0;
 
   const filter = ctx.createBiquadFilter();
   filter.type = 'bandpass';
@@ -161,31 +165,36 @@ function triggerSnare(ctx, synth, velocity, duration, time) {
   source.connect(filter);
   filter.connect(envGain);
   envGain.connect(synth.output);
-  source.start(time);
+  source.start();
+
+  envGain.gain.setValueAtTime(velocity, time);
+  envGain.gain.exponentialRampToValueAtTime(0.001, time + duration);
 }
 
 function triggerHihat(ctx, synth, velocity, duration, time) {
-  const freqs = [800, 1200, 1600, 2400, 3200];
   const envGain = ctx.createGain();
-  envGain.gain.setValueAtTime(velocity, time);
-  envGain.gain.exponentialRampToValueAtTime(0.001, time + duration);
+  envGain.gain.value = 0;
 
   const filter = ctx.createBiquadFilter();
   filter.type = 'bandpass';
   filter.frequency.value = 4000;
   filter.Q.value = 2;
 
+  const freqs = [800, 1200, 1600, 2400, 3200];
   for (const f of freqs) {
     const osc = ctx.createOscillator();
     osc.type = 'square';
     osc.frequency.value = f;
     osc.connect(filter);
-    osc.start(time);
+    osc.start();
     osc.stop(time + duration + 0.1);
   }
 
   filter.connect(envGain);
   envGain.connect(synth.output);
+
+  envGain.gain.setValueAtTime(velocity, time);
+  envGain.gain.exponentialRampToValueAtTime(0.001, time + duration);
 }
 
 export { createTimbre, triggerTimbre };

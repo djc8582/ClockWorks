@@ -49,39 +49,18 @@ function initAudio() {
 
   try {
     audioContext = new AudioContext();
-    console.log('[audio] AudioContext created, sampleRate:', audioContext.sampleRate, 'state:', audioContext.state);
 
-    createEffectsChain(audioContext);
-    console.log('[audio] Effects chain created, masterGain:', !!masterGain);
-
-    // Test beep — direct to destination to verify audio works at all
-    try {
-      const testOsc = audioContext.createOscillator();
-      const testGain = audioContext.createGain();
-      testOsc.type = 'sine';
-      testOsc.frequency.value = 440;
-      testGain.gain.value = 0.3;
-      testOsc.connect(testGain);
-      testGain.connect(audioContext.destination);
-      const now = audioContext.currentTime;
-      testOsc.start(now);
-      testOsc.stop(now + 0.3);
-      console.log('[audio] Test beep scheduled at', now);
-    } catch (beepErr) {
-      console.warn('[audio] Test beep FAILED:', beepErr);
+    // Resume context (required on iOS)
+    if (audioContext.resume) {
+      audioContext.resume();
     }
 
+    createEffectsChain(audioContext);
     updateCycleDuration();
-    console.log('[audio] cycleDuration:', cycleDuration);
-
     scheduler = createScheduler(audioContext, cycleDuration, onSchedulerTick);
     audioInitialized = true;
-
     scheduleAllShapes();
-    console.log('[audio] Scheduled', scheduleIds.length, 'events');
-
     scheduler.start();
-    console.log('[audio] Scheduler started');
   } catch (e) {
     console.warn('[audio] Failed to initialize audio:', e);
     audioInitialized = false;
@@ -137,27 +116,19 @@ function cleanupOrphanedSynths() {
 }
 
 // ── Note triggering ──────────────────────────────────────────
-let triggerCount = 0;
 function triggerStep(shape, stepData, vertexIndex, time) {
   if (!stepData || stepData.muted || !audioContext) return;
 
   const synth = ensureSynth(shape);
-  if (!synth) {
-    console.warn('[audio] ensureSynth returned null for', shape.timbre);
-    return;
-  }
+  if (!synth) return;
   const vel = velocityToGain(stepData.velocity);
   const dur = getNoteDuration(shape);
   const t = time || audioContext.currentTime;
 
   try {
     triggerTimbre(audioContext, synth, shape.timbre, stepData, vel, dur, t);
-    triggerCount++;
-    if (triggerCount <= 5) {
-      console.log('[audio] triggerStep:', shape.timbre, 'pitches:', stepData.pitches, 'vel:', vel.toFixed(2), 'dur:', dur.toFixed(2), 'time:', t.toFixed(2));
-    }
   } catch (e) {
-    console.warn('[audio] Failed to trigger note:', e);
+    // Silently fail — don't spam console on every note
   }
 }
 
