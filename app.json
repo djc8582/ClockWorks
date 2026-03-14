@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "Clockworks",
+    "slug": "clockworks",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "backgroundColor": "#F5F5F7"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.clockworks.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#F5F5F7"
+      },
+      "package": "com.clockworks.app"
+    },
+    "plugins": [
+      "expo-asset"
+    ]
+  }
+}
