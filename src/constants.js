@@ -93,11 +93,12 @@ export const MAX_SUBDIVISION = 4;
 
 // ── Timbres ───────────────────────────────────────────────────
 export const TIMBRES = [
-  { id: "bell",   label: "Bell",   icon: "1" },
-  { id: "keys",   label: "Keys",   icon: "2" },
-  { id: "pad",    label: "Pad",    icon: "3" },
-  { id: "pluck",  label: "Pluck",  icon: "4" },
-  { id: "glass",  label: "Glass",  icon: "5" },
+  { id: "bell",    label: "Bell",    icon: "1" },
+  { id: "keys",    label: "Keys",    icon: "2" },
+  { id: "pluck",   label: "Pluck",   icon: "3" },
+  { id: "marimba", label: "Marimba", icon: "4" },
+  { id: "bass",    label: "Bass",    icon: "5" },
+  { id: "subbass", label: "Sub",     icon: "6" },
 ];
 
 export const DRUM_TIMBRES = new Set([]);
