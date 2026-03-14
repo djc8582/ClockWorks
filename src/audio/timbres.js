@@ -1,10 +1,9 @@
 // Timbre system using one-shot oscillators per note.
 // react-native-audio-api does NOT support AudioNode.connect(AudioParam),
 // so FM/AM synthesis via modulation routing is impossible.
-// Oscillators are started immediately with gain=0, then the envelope
-// controls when sound is actually heard (avoids relying on start(futureTime)).
+// Oscillators start immediately with gain suppressed via setValueAtTime(0),
+// then the ADSR envelope ramps gain at the precise scheduled time.
 
-// ── Timbre definitions ──────────────────────────────────────
 const TIMBRE_CONFIGS = {
   classic: {
     oscType: 'sine',
@@ -85,6 +84,7 @@ function triggerTimbre(ctx, synth, timbreId, stepData, velocity, duration, time)
   const config = TIMBRE_CONFIGS[timbreId] || TIMBRE_CONFIGS.classic;
   const pitches = stepData.pitches || [60];
   const env = config.envelope;
+  const now = ctx.currentTime;
 
   for (const pitch of pitches) {
     const osc = ctx.createOscillator();
@@ -93,18 +93,16 @@ function triggerTimbre(ctx, synth, timbreId, stepData, velocity, duration, time)
     osc.type = config.oscType;
     osc.frequency.value = midiToFreq(pitch);
 
-    // Start silent — envelope controls when sound is heard
-    envGain.gain.value = 0;
+    // Suppress gain from now until note start using the automation timeline
+    envGain.gain.setValueAtTime(0, now);
+    envGain.gain.setValueAtTime(0, time);
 
-    // Connect chain: osc → envGain → synth output
+    // Connect and start immediately
     osc.connect(envGain);
     envGain.connect(synth.output);
-
-    // Start oscillator immediately (don't rely on start(futureTime))
     osc.start();
 
-    // Schedule ADSR envelope at the precise time
-    envGain.gain.setValueAtTime(0.001, time);
+    // ADSR envelope
     envGain.gain.linearRampToValueAtTime(velocity, time + env.attack);
     envGain.gain.linearRampToValueAtTime(
       Math.max(0.001, velocity * env.sustain),
@@ -115,7 +113,6 @@ function triggerTimbre(ctx, synth, timbreId, stepData, velocity, duration, time)
     envGain.gain.setValueAtTime(Math.max(0.001, velocity * env.sustain), releaseStart);
     envGain.gain.exponentialRampToValueAtTime(0.001, releaseStart + env.release);
 
-    // Stop oscillator after release
     osc.stop(releaseStart + env.release + 0.2);
   }
 }
@@ -124,12 +121,13 @@ function triggerTimbre(ctx, synth, timbreId, stepData, velocity, duration, time)
 function triggerKick(ctx, synth, stepData, velocity, duration, time) {
   const osc = ctx.createOscillator();
   const envGain = ctx.createGain();
+  const now = ctx.currentTime;
 
   osc.type = 'sine';
   const basePitch = (stepData.pitches && stepData.pitches[0]) || 36;
   const baseFreq = midiToFreq(basePitch);
 
-  envGain.gain.value = 0;
+  envGain.gain.setValueAtTime(0, now);
   osc.connect(envGain);
   envGain.connect(synth.output);
   osc.start();
@@ -155,7 +153,8 @@ function triggerSnare(ctx, synth, velocity, duration, time) {
   source.buffer = buffer;
 
   const envGain = ctx.createGain();
-  envGain.gain.value = 0;
+  const now = ctx.currentTime;
+  envGain.gain.setValueAtTime(0, now);
 
   const filter = ctx.createBiquadFilter();
   filter.type = 'bandpass';
@@ -173,7 +172,8 @@ function triggerSnare(ctx, synth, velocity, duration, time) {
 
 function triggerHihat(ctx, synth, velocity, duration, time) {
   const envGain = ctx.createGain();
-  envGain.gain.value = 0;
+  const now = ctx.currentTime;
+  envGain.gain.setValueAtTime(0, now);
 
   const filter = ctx.createBiquadFilter();
   filter.type = 'bandpass';

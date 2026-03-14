@@ -6,7 +6,8 @@
 export function createScheduler(audioContext, cycleDuration, onTick) {
   let interval = null;
   let running = false;
-  let loopStart = 0; // audioContext.currentTime when loop last started
+  let loopStart = 0;
+  let absoluteStart = 0; // Never changes — used for monotonic cycle numbers
   let _cycleDuration = cycleDuration;
   const INTERVAL_MS = 25;
   const LOOKAHEAD_S = 0.1;
@@ -15,7 +16,7 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
     if (!running) return;
     const now = audioContext.currentTime;
 
-    // Advance loopStart BEFORE tick so cycle numbers are correct
+    // Advance loopStart BEFORE tick so loop position is correct
     const elapsed = now - loopStart;
     if (elapsed >= _cycleDuration) {
       const cyclesToAdvance = Math.floor(elapsed / _cycleDuration);
@@ -31,7 +32,9 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
   function start() {
     if (running) return;
     running = true;
-    loopStart = audioContext.currentTime;
+    const now = audioContext.currentTime;
+    loopStart = now;
+    absoluteStart = now;
     interval = setInterval(tick, INTERVAL_MS);
   }
 
@@ -52,9 +55,10 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
     return ((elapsed % _cycleDuration) + _cycleDuration) % _cycleDuration;
   }
 
+  // Monotonically increasing cycle number — never resets
   function getCycleNumber(currentTime) {
-    const elapsed = currentTime - loopStart;
-    return Math.floor(elapsed / _cycleDuration);
+    const totalElapsed = currentTime - absoluteStart;
+    return Math.floor(totalElapsed / _cycleDuration);
   }
 
   function getSeconds() {
