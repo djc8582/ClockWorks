@@ -9,18 +9,13 @@ let scheduler = null;
 let audioInitialized = false;
 let cycleDuration = 2;
 let masterGain = null;
-
-// Synth pool: one config per timbre (lightweight — just config + volume)
 let synthMap = new Map();
-
-// Callbacks for visuals
 let onNoteTriggered = null;
-// Track scheduled visual callbacks to avoid duplicates
-let visualTimeouts = [];
 
-function setNoteCallback(cb) {
-  onNoteTriggered = cb;
-}
+// Track which events have fired this cycle
+let lastFireTimes = {};
+
+function setNoteCallback(cb) { onNoteTriggered = cb; }
 
 function velocityToGain(velocity) {
   return Math.max(0.01, (velocity / 127) * 0.85);
@@ -29,7 +24,7 @@ function velocityToGain(velocity) {
 function getNoteDuration(shape) {
   const sub = shape.subdivision || 1;
   const interval = cycleDuration / (shape.sides * sub);
-  return Math.min(interval * 0.8, 1.0);
+  return Math.min(interval * 0.6, 0.5);
 }
 
 // ── Init ─────────────────────────────────────────────────────
@@ -45,13 +40,11 @@ function initAudio() {
     masterGain.connect(audioContext.destination);
 
     updateCycleDuration();
-
-    // The scheduler calls onScheduleCycle for each cycle that needs scheduling
-    scheduler = createScheduler(audioContext, cycleDuration, onScheduleCycle);
+    scheduler = createScheduler(audioContext, cycleDuration, onSchedulerTick);
     audioInitialized = true;
     scheduler.start();
   } catch (e) {
-    console.warn('[audio] Failed to initialize audio:', e);
+    console.warn('[audio] Init failed:', e);
     audioInitialized = false;
   }
 }
@@ -82,23 +75,19 @@ function ensureSynth(shape) {
   return synth;
 }
 
-function swapTimbre(shape) {
-  ensureSynth(shape);
-}
+function swapTimbre(shape) { ensureSynth(shape); }
 
 function cleanupOrphanedSynths() {
   const usedTimbres = new Set(getShapes().map(s => s.timbre || 'classic'));
   for (const [timbre] of synthMap) {
-    if (!usedTimbres.has(timbre)) {
-      synthMap.delete(timbre);
-    }
+    if (!usedTimbres.has(timbre)) synthMap.delete(timbre);
   }
 }
 
-// ── Cycle scheduling ────────────────────────────────────────
-// Called by the scheduler for each cycle that needs to be pre-scheduled.
-// Creates all oscillators + envelopes for every note in the cycle.
-function onScheduleCycle(cycleStartTime, cycleNumber) {
+// ── Scheduler tick ──────────────────────────────────────────
+// Called every 25ms with the current loop position.
+// Checks which events should fire and plays them immediately.
+function onSchedulerTick(loopPos, now) {
   const shapes = getShapes();
 
   for (const shape of shapes) {
@@ -112,50 +101,54 @@ function onScheduleCycle(cycleStartTime, cycleNumber) {
 
     for (let i = 0; i < sides; i++) {
       for (let s = 0; s < sub; s++) {
-        const noteTime = cycleStartTime + i * interval + s * subInterval;
-        const v = shape.vertices[i];
-        if (!v) continue;
+        const eventTime = i * interval + s * subInterval;
+        const eventKey = `${shape.id}-${i}-${s}`;
 
-        const stepData = s === 0 ? v : (v.subs && v.subs[s - 1]);
-        if (!stepData || stepData.muted) continue;
+        // Check if we've passed this event's time
+        // Use a window: event fires if loopPos is within [eventTime, eventTime + window)
+        const window = 0.04; // 40ms window
+        let diff = loopPos - eventTime;
+        // Handle wrap-around
+        if (diff < -cycleDuration / 2) diff += cycleDuration;
+        if (diff > cycleDuration / 2) diff -= cycleDuration;
 
-        const vel = velocityToGain(stepData.velocity);
-        const dur = getNoteDuration(shape);
+        if (diff >= 0 && diff < window) {
+          // Check if already fired recently
+          const lastFire = lastFireTimes[eventKey] || 0;
+          if (now - lastFire < cycleDuration * 0.5) continue;
+          lastFireTimes[eventKey] = now;
 
-        try {
-          triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur, noteTime);
-        } catch (e) {
-          // Don't let one bad note stop the cycle
-        }
+          const v = shape.vertices[i];
+          if (!v) continue;
+          const stepData = s === 0 ? v : (v.subs && v.subs[s - 1]);
+          if (!stepData || stepData.muted) continue;
 
-        // Schedule visual callback
-        if (s === 0 && onNoteTriggered) {
-          const delayMs = Math.max(0, (noteTime - audioContext.currentTime) * 1000);
-          const tid = setTimeout(() => {
+          const vel = velocityToGain(stepData.velocity);
+          const dur = getNoteDuration(shape);
+
+          try {
+            triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur);
+          } catch (e) {}
+
+          if (s === 0 && onNoteTriggered) {
             onNoteTriggered(shape, i);
-          }, delayMs);
-          visualTimeouts.push(tid);
+          }
         }
       }
     }
   }
 }
 
-// ── Direct note triggering (for preview/tap) ────────────────
-function triggerStep(shape, stepData, vertexIndex, time) {
+// ── Direct triggering (preview/tap) ─────────────────────────
+function triggerStep(shape, stepData, vertexIndex) {
   if (!stepData || stepData.muted || !audioContext || !masterGain) return;
-
   const synth = ensureSynth(shape);
   if (!synth) return;
   const vel = velocityToGain(stepData.velocity);
   const dur = getNoteDuration(shape);
-  const t = time || audioContext.currentTime;
-
   try {
-    triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur, t);
-  } catch (e) {
-    // Silently fail
-  }
+    triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur);
+  } catch (e) {}
 }
 
 function triggerNote(shape, vertexIndex) {
@@ -175,14 +168,10 @@ function playPreview(shape, vertexIndex, stepIndex) {
 
 // ── Reschedule ──────────────────────────────────────────────
 function rescheduleAll() {
-  // Clear pending visual callbacks
-  for (const tid of visualTimeouts) clearTimeout(tid);
-  visualTimeouts = [];
-
+  lastFireTimes = {};
   updateCycleDuration();
   if (audioInitialized && scheduler) {
     cleanupOrphanedSynths();
-    // Stop and restart the scheduler to re-trigger cycle scheduling
     scheduler.stop();
     scheduler.start();
   }
