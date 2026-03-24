@@ -2,22 +2,23 @@
 // samples hot-swap in from assets/samples/ for timbres that have them.
 
 const ATTACK_SEC = 0.004;
-const MAX_VOICES = 48;
+const MAX_VOICES = 32;
+const MAX_NOTES_PER_TICK = 12; // Limit JSI bridge traffic per scheduler tick
 const REF_PITCHES = [48, 60, 72]; // C3, C4, C5
 const REF_NAMES = ['c3', 'c4', 'c5'];
 
-// Real sample assets — require() returns asset IDs at bundle time (safe).
-// expo-asset is loaded lazily at runtime only when we need to resolve URIs.
+// Real sample assets (m4a — native iOS AAC codec, 10-20x smaller than wav).
+// require() returns asset IDs at bundle time. expo-asset resolves URIs at runtime.
 const SAMPLE_ASSETS = {
   piano: {
-    c3: require('../../assets/samples/piano_c3.wav'),
-    c4: require('../../assets/samples/piano_c4.wav'),
-    c5: require('../../assets/samples/piano_c5.wav'),
+    c3: require('../../assets/samples/piano_c3.m4a'),
+    c4: require('../../assets/samples/piano_c4.m4a'),
+    c5: require('../../assets/samples/piano_c5.m4a'),
   },
   guitar: {
-    c3: require('../../assets/samples/guitar_c3.wav'),
-    c4: require('../../assets/samples/guitar_c4.wav'),
-    c5: require('../../assets/samples/guitar_c5.wav'),
+    c3: require('../../assets/samples/guitar_c3.m4a'),
+    c4: require('../../assets/samples/guitar_c4.m4a'),
+    c5: require('../../assets/samples/guitar_c5.m4a'),
   },
 };
 
@@ -78,34 +79,39 @@ function initSampleBank(ctx) {
       } catch (e) {}
     }
   }
-  // Phase 2: load real .wav samples in background, replacing synthesized
-  setTimeout(() => loadRealSamples(ctx).catch(() => {}), 1000);
+  // Phase 2: load real samples immediately, in parallel (m4a files are tiny)
+  loadRealSamples(ctx).catch(() => {});
 }
 
 async function loadRealSamples(ctx) {
   let Asset;
   try { Asset = require('expo-asset').Asset; } catch (e) { return; }
+
+  // Load all samples in parallel for fastest startup
+  const jobs = [];
   for (const [timbreId, assets] of Object.entries(SAMPLE_ASSETS)) {
-    if (!sampleBank[timbreId]) sampleBank[timbreId] = {};
     for (let i = 0; i < REF_PITCHES.length; i++) {
       const refName = REF_NAMES[i];
       const midi = REF_PITCHES[i];
       if (!assets[refName]) continue;
-      try {
-        const [asset] = await Asset.loadAsync(assets[refName]);
-        const uri = asset.localUri || asset.uri;
-        let buf;
-        if (ctx.decodeAudioDataSource) {
-          buf = await ctx.decodeAudioDataSource(uri);
-        } else {
-          const resp = await fetch(uri);
-          const ab = await resp.arrayBuffer();
-          buf = await ctx.decodeAudioData(ab);
-        }
-        if (buf) sampleBank[timbreId][midi] = buf;
-      } catch (e) {}
+      jobs.push((async () => {
+        try {
+          const [asset] = await Asset.loadAsync(assets[refName]);
+          const uri = asset.localUri || asset.uri;
+          let buf;
+          if (ctx.decodeAudioDataSource) {
+            buf = await ctx.decodeAudioDataSource(uri);
+          } else {
+            const resp = await fetch(uri);
+            const ab = await resp.arrayBuffer();
+            buf = await ctx.decodeAudioData(ab);
+          }
+          if (buf && sampleBank[timbreId]) sampleBank[timbreId][midi] = buf;
+        } catch (e) {}
+      })());
     }
   }
+  await Promise.all(jobs);
 }
 
 function normalize(data, peak) {
@@ -542,22 +548,11 @@ function trackVoice(entry) {
 }
 
 function killVoice(entry) {
-  try {
-    if (entry.gain) {
-      const ctx = entry.gain.context;
-      if (ctx) {
-        const now = ctx.currentTime;
-        // Set gain to 0 slightly in the future — avoids click from hard jump
-        // and avoids cancelScheduledValues (crashes react-native-audio-api@0.6.5)
-        entry.gain.gain.setValueAtTime(0, now + 0.015);
-      }
-    }
-    setTimeout(() => {
-      try { if (entry.src) entry.src.stop(); } catch (e) {}
-      try { if (entry.src) entry.src.disconnect(); } catch (e) {}
-      try { if (entry.gain) entry.gain.disconnect(); } catch (e) {}
-    }, 40);
-  } catch (e) {}
+  // Immediate disconnect — no setValueAtTime calls that could accumulate
+  // and trigger the iOS silent-drop bug under heavy voice stealing
+  try { if (entry.src) entry.src.stop(); } catch (e) {}
+  try { if (entry.src) entry.src.disconnect(); } catch (e) {}
+  try { if (entry.gain) entry.gain.disconnect(); } catch (e) {}
 }
 
 function pruneVoices(now) {

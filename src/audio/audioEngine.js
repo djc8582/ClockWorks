@@ -96,6 +96,8 @@ function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
     if (!shapes || shapes.length === 0) return;
     if (!cycleDur || cycleDur <= 0) return;
 
+    let noteCount = 0;
+
     for (const shape of shapes) {
       if (!shape || !shape.vertices) continue;
       const synth = ensureSynth(shape);
@@ -107,7 +109,6 @@ function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
       const interval = cycleDur / sides;
       const subInterval = interval / sub;
 
-      // Determine which cycles overlap our schedule window
       const relFrom = scheduleFrom - transportStart;
       const relTo = scheduleTo - transportStart;
       const firstCycle = Math.max(0, Math.floor(relFrom / cycleDur));
@@ -126,6 +127,10 @@ function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
             const stepData = s === 0 ? v : (v.subs && v.subs[s - 1]);
             if (!stepData || stepData.muted) continue;
 
+            // Cap notes per tick to prevent JSI bridge overload with many shapes
+            if (noteCount >= 12) return;
+            noteCount++;
+
             const vel = velocityToGain(stepData.velocity || 85) * (shape.volume != null ? shape.volume : 1);
             const dur = getNoteDuration(shape);
 
@@ -140,9 +145,7 @@ function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
         }
       }
     }
-  } catch (e) {
-    // Never let scheduler errors crash the app
-  }
+  } catch (e) {}
 }
 
 // ── Direct triggering (preview/tap) ─────────────────────────

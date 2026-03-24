@@ -15,4 +15,5 @@ web-build/
 
 # Copyrighted audio samples (not for redistribution)
 assets/samples/*.wav
+assets/samples/*.m4a
 assets/samples/*.aif
