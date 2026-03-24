@@ -80,7 +80,23 @@ function subscribe(listener) {
   };
 }
 
+// Ensure all selectors see new references after any state change
+function refreshRefs() {
+  if (state.scenes) {
+    const active = state.activeSceneIndex;
+    const panel = state.ui ? state.ui.panelSceneIndex : active;
+    for (const idx of new Set([active, panel])) {
+      if (state.scenes[idx]) {
+        state.scenes[idx] = { ...state.scenes[idx], shapes: [...state.scenes[idx].shapes] };
+      }
+    }
+    state.scenes = [...state.scenes];
+  }
+  state = { ...state };
+}
+
 function notifyListeners() {
+  refreshRefs();
   for (const listener of listeners) {
     listener(state);
   }
