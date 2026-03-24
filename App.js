@@ -243,11 +243,30 @@ function AddShapeOverlay({ sides }) {
   );
 }
 
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  render() {
+    if (this.state.error) {
+      return (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40, backgroundColor: '#fff' }}>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#E84855', marginBottom: 12 }}>Crash caught</Text>
+          <Text style={{ fontSize: 13, color: '#333' }}>{String(this.state.error)}</Text>
+          <Text style={{ fontSize: 11, color: '#999', marginTop: 8 }}>{this.state.error?.stack?.slice(0, 500)}</Text>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <AppContent />
+        <ErrorBoundary>
+          <AppContent />
+        </ErrorBoundary>
       </GestureHandlerRootView>
     </SafeAreaProvider>
   );

@@ -15,10 +15,24 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
 
   const INTERVAL_MS = 50;        // how often the JS timer fires (was 25ms)
   const LOOKAHEAD_SEC = 0.15;    // schedule 150ms ahead — fewer ticks = fewer JSI bursts
+  let lastNow = 0;
+  let frozenCount = 0;
 
   function tick() {
     if (!running || !audioContext) return;
     const now = audioContext.currentTime;
+
+    // Watchdog: detect frozen AudioContext (known iOS bug in react-native-audio-api)
+    if (now === lastNow && now !== 0) {
+      frozenCount++;
+      if (frozenCount > 10) {
+        try { audioContext.resume(); } catch (e) {}
+        frozenCount = 0;
+      }
+      return;
+    }
+    frozenCount = 0;
+    lastNow = now;
 
     // If we've fallen far behind (JS thread stall), don't try to schedule
     // events more than 50ms in the past — they'd sound late anyway.
@@ -65,11 +79,13 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
     _cycleDuration = dur;
   }
 
-  // Force the next tick to re-scan from now — used after scene transitions
-  // so the new scene's beat-0 notes aren't missed.
+  // Reset for scene transitions: start a fresh cycle from NOW so
+  // beat 0 of the new scene fires immediately.
   function resetScheduleWindow() {
-    if (running) {
-      nextScheduleTime = audioContext.currentTime;
+    if (running && audioContext) {
+      const now = audioContext.currentTime;
+      startTime = now;
+      nextScheduleTime = now;
     }
   }
 

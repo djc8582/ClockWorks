@@ -193,37 +193,37 @@ function rescheduleAll() {
     cleanupOrphanedSynths();
   }
   // Scale master gain to prevent clipping with multiple shapes
+  // Use now+0.02 to avoid collisions with close-together setValueAtTime calls
+  // (react-native-audio-api 0.6.x silently drops rapid setValueAtTime calls)
   if (audioContext && masterGain) {
     try {
       const target = getTargetGain();
       const now = audioContext.currentTime;
-      // cancelScheduledValues crashes react-native-audio-api@0.6.5 (null deque iterator)
-      masterGain.gain.setValueAtTime(masterGainValue, now);
-      masterGain.gain.linearRampToValueAtTime(target, now + 0.05);
+      masterGain.gain.setValueAtTime(masterGainValue, now + 0.02);
+      masterGain.gain.linearRampToValueAtTime(target, now + 0.07);
       masterGainValue = target;
     } catch (e) {}
   }
 }
 
-// Scene transition: let old voices ring out naturally (they have their own
-// gain envelopes and will decay on their own). Don't call fadeOutAllVoices —
-// that was causing the audible cutout between scenes. New scene notes start
-// immediately via resetScheduleWindow, creating a natural crossfade.
+// Scene transition: old voices ring out naturally via their envelopes.
+// New scene starts from beat 0 via resetScheduleWindow.
+// Brief master gain duck masks the crossfade seam.
 function transitionScene() {
   updateCycleDuration();
   if (audioInitialized && scheduler) {
     cleanupOrphanedSynths();
-    // Reset schedule window so the new scene's beat-0 notes are picked up
-    // immediately instead of waiting for the next tick window.
     scheduler.resetScheduleWindow();
   }
-  // Update master gain for new scene's shape count (no dip)
   if (audioContext && masterGain) {
     try {
       const target = getTargetGain();
       const now = audioContext.currentTime;
-      masterGain.gain.setValueAtTime(masterGainValue, now);
-      masterGain.gain.linearRampToValueAtTime(target, now + 0.05);
+      // Brief duck to 60% over 20ms, then rise to target over 80ms
+      // This masks the amplitude spike from overlapping old+new voices
+      masterGain.gain.setValueAtTime(masterGainValue, now + 0.001);
+      masterGain.gain.linearRampToValueAtTime(masterGainValue * 0.6, now + 0.02);
+      masterGain.gain.linearRampToValueAtTime(target, now + 0.10);
       masterGainValue = target;
     } catch (e) {}
   }

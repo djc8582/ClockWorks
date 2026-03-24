@@ -1,10 +1,25 @@
-// Sample-based timbre system with pre-rendered AudioBuffers.
-// Each note = 1 AudioBufferSourceNode + 1 GainNode.
-// Frequency-dependent rendering for consistent quality across octaves.
+// Hybrid timbre system: synthesized buffers load instantly, then real .wav
+// samples hot-swap in from assets/samples/ for timbres that have them.
 
 const ATTACK_SEC = 0.004;
 const MAX_VOICES = 48;
 const REF_PITCHES = [48, 60, 72]; // C3, C4, C5
+const REF_NAMES = ['c3', 'c4', 'c5'];
+
+// Real sample assets — require() returns asset IDs at bundle time (safe).
+// expo-asset is loaded lazily at runtime only when we need to resolve URIs.
+const SAMPLE_ASSETS = {
+  piano: {
+    c3: require('../../assets/samples/piano_c3.wav'),
+    c4: require('../../assets/samples/piano_c4.wav'),
+    c5: require('../../assets/samples/piano_c5.wav'),
+  },
+  guitar: {
+    c3: require('../../assets/samples/guitar_c3.wav'),
+    c4: require('../../assets/samples/guitar_c4.wav'),
+    c5: require('../../assets/samples/guitar_c5.wav'),
+  },
+};
 
 let sampleBank = null;
 const activeVoices = [];
@@ -48,6 +63,7 @@ const ALL_TIMBRES = [
 function initSampleBank(ctx) {
   const sr = ctx.sampleRate || 44100;
   sampleBank = {};
+  // Phase 1: synthesized buffers (instant, synchronous)
   for (const id of ALL_TIMBRES) {
     sampleBank[id] = {};
     for (const midi of REF_PITCHES) {
@@ -59,9 +75,35 @@ function initSampleBank(ctx) {
         const ch = buf.getChannelData(0);
         for (let i = 0; i < raw.length; i++) ch[i] = raw[i];
         sampleBank[id][midi] = buf;
-      } catch (e) {
-        // Skip this sample — better than crashing the whole app
-      }
+      } catch (e) {}
+    }
+  }
+  // Phase 2: load real .wav samples in background, replacing synthesized
+  setTimeout(() => loadRealSamples(ctx).catch(() => {}), 1000);
+}
+
+async function loadRealSamples(ctx) {
+  let Asset;
+  try { Asset = require('expo-asset').Asset; } catch (e) { return; }
+  for (const [timbreId, assets] of Object.entries(SAMPLE_ASSETS)) {
+    if (!sampleBank[timbreId]) sampleBank[timbreId] = {};
+    for (let i = 0; i < REF_PITCHES.length; i++) {
+      const refName = REF_NAMES[i];
+      const midi = REF_PITCHES[i];
+      if (!assets[refName]) continue;
+      try {
+        const [asset] = await Asset.loadAsync(assets[refName]);
+        const uri = asset.localUri || asset.uri;
+        let buf;
+        if (ctx.decodeAudioDataSource) {
+          buf = await ctx.decodeAudioDataSource(uri);
+        } else {
+          const resp = await fetch(uri);
+          const ab = await resp.arrayBuffer();
+          buf = await ctx.decodeAudioData(ab);
+        }
+        if (buf) sampleBank[timbreId][midi] = buf;
+      } catch (e) {}
     }
   }
 }
