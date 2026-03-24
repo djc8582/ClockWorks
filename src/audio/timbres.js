@@ -58,12 +58,16 @@ const ALL_TIMBRES = [
 // Example:
 //   piano: { c3: require('../../assets/samples/piano_c3.wav'), c4: ..., c5: ... },
 const SAMPLE_ASSETS = {
-  // Add entries here as you add .wav files:
-  // piano: {
-  //   c3: require('../../assets/samples/piano_c3.wav'),
-  //   c4: require('../../assets/samples/piano_c4.wav'),
-  //   c5: require('../../assets/samples/piano_c5.wav'),
-  // },
+  piano: {
+    c3: require('../../assets/samples/piano_c3.wav'),
+    c4: require('../../assets/samples/piano_c4.wav'),
+    c5: require('../../assets/samples/piano_c5.wav'),
+  },
+  guitar: {
+    c3: require('../../assets/samples/guitar_c3.wav'),
+    c4: require('../../assets/samples/guitar_c4.wav'),
+    c5: require('../../assets/samples/guitar_c5.wav'),
+  },
 };
 
 // Load a .wav asset into an AudioBuffer via file path (avoids fetch + arrayBuffer)

@@ -12,3 +12,7 @@ android/
 web-build/
 .env
 *.swp
+
+# Copyrighted audio samples (not for redistribution)
+assets/samples/*.wav
+assets/samples/*.aif
