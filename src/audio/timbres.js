@@ -7,18 +7,17 @@ const MAX_NOTES_PER_TICK = 12; // Limit JSI bridge traffic per scheduler tick
 const REF_PITCHES = [48, 60, 72]; // C3, C4, C5
 const REF_NAMES = ['c3', 'c4', 'c5'];
 
-// Real sample assets (m4a — native iOS AAC codec, 10-20x smaller than wav).
-// require() returns asset IDs at bundle time. expo-asset resolves URIs at runtime.
+// Real sample assets — wav files decoded natively via decodeAudioDataSource.
 const SAMPLE_ASSETS = {
   piano: {
-    c3: require('../../assets/samples/piano_c3.m4a'),
-    c4: require('../../assets/samples/piano_c4.m4a'),
-    c5: require('../../assets/samples/piano_c5.m4a'),
+    c3: require('../../assets/samples/piano_c3.wav'),
+    c4: require('../../assets/samples/piano_c4.wav'),
+    c5: require('../../assets/samples/piano_c5.wav'),
   },
   guitar: {
-    c3: require('../../assets/samples/guitar_c3.m4a'),
-    c4: require('../../assets/samples/guitar_c4.m4a'),
-    c5: require('../../assets/samples/guitar_c5.m4a'),
+    c3: require('../../assets/samples/guitar_c3.wav'),
+    c4: require('../../assets/samples/guitar_c4.wav'),
+    c5: require('../../assets/samples/guitar_c5.wav'),
   },
 };
 
