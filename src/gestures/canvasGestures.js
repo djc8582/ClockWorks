@@ -13,23 +13,19 @@ const CENTER_TAP_RADIUS = 30;
 function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
   const state = getState();
 
-  // First tap — start audio
-  if (!state.ui.audioStarted) {
-    initAudio();
-    updateState(s => { s.ui.audioStarted = true; s.ui.playing = true; });
-    return;
-  }
-
   // Add panel open — handle it
   if (state.ui.addPanelOpen) {
     updateState(s => { s.ui.addPanelOpen = false; });
     return;
   }
 
-  // Tap center = play/pause toggle
+  // Tap center = unified play/pause (also handles first-tap init)
   const distFromCenter = distanceBetween(x, y, centerX, centerY);
-  if (distFromCenter < CENTER_TAP_RADIUS) {
-    if (state.ui.playing) {
+  if (distFromCenter < CENTER_TAP_RADIUS || !state.ui.audioStarted) {
+    if (!state.ui.audioStarted) {
+      initAudio();
+      updateState(s => { s.ui.audioStarted = true; s.ui.playing = true; });
+    } else if (state.ui.playing) {
       pauseAudio();
       updateState(s => { s.ui.playing = false; });
     } else {

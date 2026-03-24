@@ -83,13 +83,13 @@ export default function CanvasView({
     [layout.width, layout.height]
   );
 
-  // Play/pause icon paths — small centered icons
+  // Play/pause icon paths — consistent size for the center button
   const playPath = useMemo(
-    () => `M ${centerX - 6} ${centerY - 10} L ${centerX + 10} ${centerY} L ${centerX - 6} ${centerY + 10} Z`,
+    () => `M ${centerX - 8} ${centerY - 14} L ${centerX + 14} ${centerY} L ${centerX - 8} ${centerY + 14} Z`,
     [centerX, centerY]
   );
   const pausePath = useMemo(
-    () => `M ${centerX - 7} ${centerY - 9} L ${centerX - 3} ${centerY - 9} L ${centerX - 3} ${centerY + 9} L ${centerX - 7} ${centerY + 9} Z M ${centerX + 3} ${centerY - 9} L ${centerX + 7} ${centerY - 9} L ${centerX + 7} ${centerY + 9} L ${centerX + 3} ${centerY + 9} Z`,
+    () => `M ${centerX - 9} ${centerY - 12} L ${centerX - 4} ${centerY - 12} L ${centerX - 4} ${centerY + 12} L ${centerX - 9} ${centerY + 12} Z M ${centerX + 4} ${centerY - 12} L ${centerX + 9} ${centerY - 12} L ${centerX + 9} ${centerY + 12} L ${centerX + 4} ${centerY + 12} Z`,
     [centerX, centerY]
   );
 
@@ -155,19 +155,22 @@ export default function CanvasView({
           <FireAnimations fires={fireAnimations} />
           <SpokeAnimations spokes={spokeAnimations} />
 
-          {/* Center play/pause button — always visible */}
-          {!audioStarted ? (
-            <Group>
-              <Rect x={0} y={0} width={layout.width} height={layout.height} color="rgba(0,0,0,0.18)" />
-              <Circle cx={centerX} cy={centerY} r={36} color={COLORS.shapes[0].main} />
-              <SkiaPath path={playPath} color="white" />
-            </Group>
-          ) : (
-            <Group>
-              <Circle cx={centerX} cy={centerY} r={20} color={playing ? 'rgba(0,0,0,0.06)' : 'rgba(0,0,0,0.12)'} />
-              <SkiaPath path={playing ? pausePath : playPath} color={playing ? 'rgba(0,0,0,0.25)' : COLORS.text} />
-            </Group>
-          )}
+          {/* Unified play/pause button — same style always */}
+          <Group>
+            {!audioStarted && (
+              <Rect x={0} y={0} width={layout.width} height={layout.height} color="rgba(0,0,0,0.15)" />
+            )}
+            <Circle
+              cx={centerX}
+              cy={centerY}
+              r={playing ? 18 : 36}
+              color={playing ? 'rgba(0,0,0,0.05)' : COLORS.shapes[0].main}
+            />
+            <SkiaPath
+              path={playing ? pausePath : playPath}
+              color={playing ? 'rgba(0,0,0,0.2)' : 'white'}
+            />
+          </Group>
         </Canvas>
       </GestureDetector>
     </View>

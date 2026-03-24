@@ -205,12 +205,11 @@ function rescheduleAll() {
   }
 }
 
-// Scene transition: fade old voices out, keep master gain steady.
-// No masterGain dip — new scene notes start immediately on the next
-// scheduler tick, so the crossfade is old voices fading out while
-// new voices fade in naturally via their attack envelopes.
+// Scene transition: let old voices ring out naturally (they have their own
+// gain envelopes and will decay on their own). Don't call fadeOutAllVoices —
+// that was causing the audible cutout between scenes. New scene notes start
+// immediately via resetScheduleWindow, creating a natural crossfade.
 function transitionScene() {
-  if (audioContext) fadeOutAllVoices(audioContext);
   updateCycleDuration();
   if (audioInitialized && scheduler) {
     cleanupOrphanedSynths();
