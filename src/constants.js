@@ -103,8 +103,10 @@ export const TIMBRES = [
   { id: "pluck",   label: "Pluck",    category: "String" },
   { id: "guitar",  label: "Guitar",   category: "String" },
   { id: "strings", label: "Strings",  category: "String" },
-  { id: "bass",    label: "Bass",     category: "Bass" },
-  { id: "subbass", label: "Sub Bass", category: "Bass" },
+  { id: "bass",        label: "Bass",        category: "Bass" },
+  { id: "subbass",     label: "Sub Bass",    category: "Bass" },
+  { id: "electroflow", label: "Electroflow", category: "Synth" },
+  { id: "darkthought", label: "Dark Thought",category: "Synth" },
   // Drum Kits — each vertex cycles through kick, snare, hihat, perc
   { id: "drumkit1", label: "Vinyl Kit",  category: "Drums" },
   { id: "drumkit2", label: "Tight Kit",  category: "Drums" },

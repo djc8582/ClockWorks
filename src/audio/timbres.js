@@ -19,6 +19,16 @@ const SAMPLE_ASSETS = {
     c4: require('../../assets/samples/guitar_c4.wav'),
     c5: require('../../assets/samples/guitar_c5.wav'),
   },
+  electroflow: {
+    c3: require('../../assets/samples/electroflow_c3.wav'),
+    c4: require('../../assets/samples/electroflow_c4.wav'),
+    c5: require('../../assets/samples/electroflow_c5.wav'),
+  },
+  darkthought: {
+    c3: require('../../assets/samples/darkthought_c3.wav'),
+    c4: require('../../assets/samples/darkthought_c4.wav'),
+    c5: require('../../assets/samples/darkthought_c5.wav'),
+  },
 };
 
 // Drum kit samples — each kit has 4 slots: kick, snare, hihat, perc
