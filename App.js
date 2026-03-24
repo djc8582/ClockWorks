@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { View, StyleSheet, StatusBar, Pressable, Text } from 'react-native';
-import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { View, StyleSheet, StatusBar, Pressable, Text, useWindowDimensions } from 'react-native';
+import { GestureHandlerRootView, Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { initState, getState, getShapes, updateState } from './src/state.js';
@@ -29,17 +29,39 @@ initSequencer();
 const MAX_FIRE_ANIMATIONS = 20;
 const MAX_SPOKE_ANIMATIONS = 20;
 
+const MIN_PANEL_HEIGHT = 120;
+const MAX_PANEL_FRACTION = 0.75;
+const DEFAULT_PANEL_FRACTION = 0.45;
+
 function AppContent() {
   const insets = useSafeAreaInsets();
+  const { height: screenHeight } = useWindowDimensions();
 
   // Animation state for fire/spoke (simplified — driven by note callbacks)
   const [fireAnimations, setFireAnimations] = useState([]);
   const [spokeAnimations, setSpokeAnimations] = useState([]);
   const [canvasLayout, setCanvasLayout] = useState({ width: 300, height: 300 });
+  const [panelHeight, setPanelHeight] = useState(Math.round(screenHeight * DEFAULT_PANEL_FRACTION));
+  const panelDragStart = useRef(0);
 
   // Track pending timeouts for cleanup on unmount
   const pendingTimers = useRef(new Set());
   const animIdCounter = useRef(0);
+
+  // Drag handle for resizing bottom panel
+  const panelDrag = useMemo(() =>
+    Gesture.Pan()
+      .runOnJS(true)
+      .onStart(() => {
+        panelDragStart.current = panelHeight;
+      })
+      .onUpdate((e) => {
+        const maxH = Math.round(screenHeight * MAX_PANEL_FRACTION);
+        const newH = Math.round(panelDragStart.current - e.translationY);
+        setPanelHeight(Math.max(MIN_PANEL_HEIGHT, Math.min(maxH, newH)));
+      }),
+    [panelHeight, screenHeight]
+  );
 
   // Canvas layout info for fire animation positioning
   const onCanvasLayout = useCallback((layout) => {
@@ -175,8 +197,14 @@ function AppContent() {
         {/* Scene strip */}
         <SceneStrip />
 
-        {/* Bottom panel: piano roll */}
-        <View style={[styles.bottomPanel, { paddingBottom: insets.bottom }]}>
+        {/* Bottom panel: piano roll — resizable via drag handle */}
+        <View style={[styles.bottomPanel, { height: panelHeight, paddingBottom: insets.bottom }]}>
+          {/* Drag handle */}
+          <GestureDetector gesture={panelDrag}>
+            <View style={styles.dragHandle}>
+              <View style={styles.dragBar} />
+            </View>
+          </GestureDetector>
           <PanelHeader shape={panelShape} color={panelColor} />
           <TimbreRow shape={panelShape} color={panelColor} />
           <PianoRoll shape={panelShape} color={panelColor} />
@@ -255,10 +283,19 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.bg,
   },
   bottomPanel: {
-    height: '45%',
     backgroundColor: COLORS.panelBg,
     borderTopWidth: 1,
     borderTopColor: 'rgba(0,0,0,0.08)',
+  },
+  dragHandle: {
+    alignItems: 'center',
+    paddingVertical: 6,
+  },
+  dragBar: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(0,0,0,0.15)',
   },
   addOverlay: {
     ...StyleSheet.absoluteFillObject,

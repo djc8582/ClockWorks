@@ -3,8 +3,11 @@ import { Gesture } from 'react-native-gesture-handler';
 import { getState, getShapes, updateState, generateShapeId } from '../state.js';
 import { calculateRingRadii } from '../shapes.js';
 import { hitTest, hitTestGhostRing, getNextSideCount, getNextColorIndex } from './hitTesting.js';
-import { initAudio, rescheduleAll } from '../audio/audioEngine.js';
+import { initAudio, pauseAudio, resumeAudio, rescheduleAll } from '../audio/audioEngine.js';
 import { DIMENSIONS, MAX_SHAPES, PITCH, TIMBRES, DRUM_TIMBRES } from '../constants.js';
+import { distanceBetween } from '../shapes.js';
+
+const CENTER_TAP_RADIUS = 30;
 
 // All gesture logic runs on JS thread via runOnJS
 function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
@@ -13,13 +16,26 @@ function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
   // First tap — start audio
   if (!state.ui.audioStarted) {
     initAudio();
-    updateState(s => { s.ui.audioStarted = true; });
+    updateState(s => { s.ui.audioStarted = true; s.ui.playing = true; });
     return;
   }
 
   // Add panel open — handle it
   if (state.ui.addPanelOpen) {
     updateState(s => { s.ui.addPanelOpen = false; });
+    return;
+  }
+
+  // Tap center = play/pause toggle
+  const distFromCenter = distanceBetween(x, y, centerX, centerY);
+  if (distFromCenter < CENTER_TAP_RADIUS) {
+    if (state.ui.playing) {
+      pauseAudio();
+      updateState(s => { s.ui.playing = false; });
+    } else {
+      resumeAudio();
+      updateState(s => { s.ui.playing = true; });
+    }
     return;
   }
 

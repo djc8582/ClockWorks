@@ -230,6 +230,19 @@ function transitionScene() {
   }
 }
 
+// ── Pause / Resume ──────────────────────────────────────────
+function pauseAudio() {
+  if (!audioInitialized || !scheduler) return;
+  scheduler.stop();
+  try { if (audioContext && audioContext.suspend) audioContext.suspend(); } catch (e) {}
+}
+
+function resumeAudio() {
+  if (!audioInitialized || !scheduler) return;
+  try { if (audioContext && audioContext.resume) audioContext.resume(); } catch (e) {}
+  scheduler.start();
+}
+
 // ── Exports ─────────────────────────────────────────────────
 function isAudioInitialized() { return audioInitialized; }
 function getAudioContext() { return audioContext; }
@@ -240,7 +253,7 @@ function getTransportSeconds() {
 }
 
 export {
-  initAudio, updateBPM, rescheduleAll, transitionScene, triggerNote, playPreview,
-  swapTimbre, isAudioInitialized, getTransportSeconds,
+  initAudio, pauseAudio, resumeAudio, updateBPM, rescheduleAll, transitionScene,
+  triggerNote, playPreview, swapTimbre, isAudioInitialized, getTransportSeconds,
   getCycleDuration, ensureSynth, setNoteCallback, getAudioContext,
 };

@@ -42,6 +42,7 @@ function createDefaultState() {
       clockAngle: -Math.PI / 2,
       mixerOpen: false,
       audioStarted: false,
+      playing: false,
       ghostRingHover: false,
       addPanelOpen: false,
       addPanelSides: 4,

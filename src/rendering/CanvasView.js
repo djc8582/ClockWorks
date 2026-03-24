@@ -40,6 +40,7 @@ export default function CanvasView({
   const panelShapeId = useStore(s => s.ui.panelShapeId);
   const selectedNodeIndex = useStore(s => s.ui.selectedNodeIndex);
   const audioStarted = useStore(s => s.ui.audioStarted);
+  const playing = useStore(s => s.ui.playing);
   const addPanelOpen = useStore(s => s.ui.addPanelOpen);
 
   const zMaxR = maxRadius * canvasZoom;
@@ -82,9 +83,13 @@ export default function CanvasView({
     [layout.width, layout.height]
   );
 
-  // Memoize play button path string
+  // Play/pause icon paths — small centered icons
   const playPath = useMemo(
-    () => `M ${centerX - 18} ${centerY - 28} L ${centerX + 30} ${centerY} L ${centerX - 18} ${centerY + 28} Z`,
+    () => `M ${centerX - 6} ${centerY - 10} L ${centerX + 10} ${centerY} L ${centerX - 6} ${centerY + 10} Z`,
+    [centerX, centerY]
+  );
+  const pausePath = useMemo(
+    () => `M ${centerX - 7} ${centerY - 9} L ${centerX - 3} ${centerY - 9} L ${centerX - 3} ${centerY + 9} L ${centerX - 7} ${centerY + 9} Z M ${centerX + 3} ${centerY - 9} L ${centerX + 7} ${centerY - 9} L ${centerX + 7} ${centerY + 9} L ${centerX + 3} ${centerY + 9} Z`,
     [centerX, centerY]
   );
 
@@ -137,7 +142,7 @@ export default function CanvasView({
           )}
 
           {/* Clock hand — angle is a shared value, zero React re-renders */}
-          {audioStarted && (
+          {audioStarted && playing && (
             <ClockHand
               angle={clockAngle}
               centerX={centerX}
@@ -150,16 +155,17 @@ export default function CanvasView({
           <FireAnimations fires={fireAnimations} />
           <SpokeAnimations spokes={spokeAnimations} />
 
-          {/* Tap to start overlay */}
-          {!audioStarted && (
+          {/* Center play/pause button — always visible */}
+          {!audioStarted ? (
             <Group>
-              <Rect x={0} y={0} width={layout.width} height={layout.height} color="rgba(0,0,0,0.25)" />
-              <Circle cx={centerX} cy={centerY} r={72} color={COLORS.shapes[0].main} />
-              <Circle cx={centerX} cy={centerY} r={68} color="rgba(255,255,255,0.15)" />
-              <SkiaPath
-                path={playPath}
-                color="white"
-              />
+              <Rect x={0} y={0} width={layout.width} height={layout.height} color="rgba(0,0,0,0.18)" />
+              <Circle cx={centerX} cy={centerY} r={36} color={COLORS.shapes[0].main} />
+              <SkiaPath path={playPath} color="white" />
+            </Group>
+          ) : (
+            <Group>
+              <Circle cx={centerX} cy={centerY} r={20} color={playing ? 'rgba(0,0,0,0.06)' : 'rgba(0,0,0,0.12)'} />
+              <SkiaPath path={playing ? pausePath : playPath} color={playing ? 'rgba(0,0,0,0.25)' : COLORS.text} />
             </Group>
           )}
         </Canvas>
