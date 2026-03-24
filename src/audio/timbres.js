@@ -6,7 +6,12 @@
 //   {timbreId}_c3.wav, {timbreId}_c4.wav, {timbreId}_c5.wav
 // The loader will use them instead of synthesis for that timbre.
 
-import { Asset } from 'expo-asset';
+// Asset imported lazily to avoid module init order issues
+let Asset = null;
+function getAsset() {
+  if (!Asset) Asset = require('expo-asset').Asset;
+  return Asset;
+}
 
 const ATTACK_SEC = 0.004;
 const MAX_VOICES = 48;
@@ -73,7 +78,7 @@ const SAMPLE_ASSETS = {
 // Load a .wav asset into an AudioBuffer via file path (avoids fetch + arrayBuffer)
 async function loadWavAsset(ctx, assetModule) {
   try {
-    const [asset] = await Asset.loadAsync(assetModule);
+    const [asset] = await getAsset().loadAsync(assetModule);
     const uri = asset.localUri || asset.uri;
     // decodeAudioDataSource takes a file path and handles decoding natively
     if (ctx.decodeAudioDataSource) {
@@ -106,10 +111,12 @@ function initSampleBank(ctx) {
     }
   }
   // Phase 2: load real .wav samples in background, replacing synthesized ones
-  loadRealSamples(ctx);
+  loadRealSamples(ctx).catch(() => {});
 }
 
 async function loadRealSamples(ctx) {
+  // Small delay to let the app finish initializing before we load assets
+  await new Promise(r => setTimeout(r, 500));
   for (const [timbreId, assets] of Object.entries(SAMPLE_ASSETS)) {
     if (!sampleBank[timbreId]) sampleBank[timbreId] = {};
     for (let i = 0; i < REF_PITCHES.length; i++) {
