@@ -135,7 +135,7 @@ function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
             const dur = getNoteDuration(shape);
 
             try {
-              triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur, eventTime);
+              triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur, eventTime, i);
             } catch (e) {}
 
             if (s === 0 && onNoteTriggered) {

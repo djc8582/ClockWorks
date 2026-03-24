@@ -17,3 +17,5 @@ web-build/
 assets/samples/*.wav
 assets/samples/*.m4a
 assets/samples/*.aif
+assets/samples/drums/*.wav
+assets/samples/drums/*.aif

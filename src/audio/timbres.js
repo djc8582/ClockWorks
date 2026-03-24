@@ -21,7 +21,30 @@ const SAMPLE_ASSETS = {
   },
 };
 
+// Drum kit samples — each kit has 4 slots: kick, snare, hihat, perc
+const DRUM_KIT_ASSETS = {
+  drumkit1: {
+    kick:  require('../../assets/samples/drums/kit1_kick.wav'),
+    snare: require('../../assets/samples/drums/kit1_snare.wav'),
+    hihat: require('../../assets/samples/drums/kit1_hihat.wav'),
+    perc:  require('../../assets/samples/drums/kit1_perc.wav'),
+  },
+  drumkit2: {
+    kick:  require('../../assets/samples/drums/kit2_kick.wav'),
+    snare: require('../../assets/samples/drums/kit2_snare.wav'),
+    hihat: require('../../assets/samples/drums/kit2_hihat.wav'),
+    perc:  require('../../assets/samples/drums/kit2_perc.wav'),
+  },
+  drumkit3: {
+    kick:  require('../../assets/samples/drums/kit3_kick.wav'),
+    snare: require('../../assets/samples/drums/kit3_snare.wav'),
+    hihat: require('../../assets/samples/drums/kit3_hihat.wav'),
+    perc:  require('../../assets/samples/drums/kit3_perc.wav'),
+  },
+};
+
 let sampleBank = null;
+let drumBank = {}; // { kitId: { kick: AudioBuffer, snare: ..., hihat: ..., perc: ... } }
 const activeVoices = [];
 
 function midiToFreq(midi) {
@@ -51,13 +74,12 @@ const PEAK_TARGETS = {
   epiano: 0.75, piano: 0.75, keys: 0.75, organ: 0.70,
   marimba: 0.75, vibes: 0.72, pluck: 0.70, guitar: 0.72,
   strings: 0.65, bass: 0.80, subbass: 0.85,
-  kick: 0.90, snare: 0.80, hihat: 0.65, clap: 0.75,
 };
 
+// Melodic timbres only — drums loaded separately from real samples
 const ALL_TIMBRES = [
   'epiano', 'piano', 'keys', 'organ', 'marimba', 'vibes',
   'pluck', 'guitar', 'strings', 'bass', 'subbass',
-  'kick', 'snare', 'hihat', 'clap',
 ];
 
 function initSampleBank(ctx) {
@@ -110,6 +132,29 @@ async function loadRealSamples(ctx) {
       })());
     }
   }
+  // Also load drum kit samples
+  for (const [kitId, slots] of Object.entries(DRUM_KIT_ASSETS)) {
+    for (const [slotName, assetModule] of Object.entries(slots)) {
+      jobs.push((async () => {
+        try {
+          const [asset] = await Asset.loadAsync(assetModule);
+          const uri = asset.localUri || asset.uri;
+          let buf;
+          if (ctx.decodeAudioDataSource) {
+            buf = await ctx.decodeAudioDataSource(uri);
+          } else {
+            const resp = await fetch(uri);
+            const ab = await resp.arrayBuffer();
+            buf = await ctx.decodeAudioData(ab);
+          }
+          if (buf) {
+            if (!drumBank[kitId]) drumBank[kitId] = {};
+            drumBank[kitId][slotName] = buf;
+          }
+        } catch (e) {}
+      })());
+    }
+  }
   await Promise.all(jobs);
 }
 
@@ -138,10 +183,6 @@ function renderTimbre(id, freq, sr) {
     case 'strings': return renderStrings(freq, sr);
     case 'bass':    return renderBass(freq, sr);
     case 'subbass': return renderSubBass(freq, sr);
-    case 'kick':    return renderKick(freq, sr);
-    case 'snare':   return renderSnare(freq, sr);
-    case 'hihat':   return renderHihat(freq, sr);
-    case 'clap':    return renderClap(freq, sr);
     default:        return renderEPiano(freq, sr);
   }
 }
@@ -611,13 +652,48 @@ function createTimbre(ctx, timbreId) {
   return { timbreId, dispose() {} };
 }
 
-function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, startTime) {
-  if (!ctx || !masterGain || !synth || !stepData || !sampleBank) return;
+const DRUM_SLOT_ORDER = ['kick', 'snare', 'hihat', 'perc'];
+
+function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, startTime, vertexIndex) {
+  if (!ctx || !masterGain || !synth || !stepData) return;
   const now = ctx.currentTime;
-  // Clamp start time to currentTime — future scheduling may crash native audio
   const t = Math.max(startTime || now, now);
   pruneVoices(now);
 
+  // Drum kit: pick sample based on vertex index cycling through kick/snare/hihat/perc
+  const isDrum = synth.timbreId.startsWith('drumkit');
+  if (isDrum) {
+    const kit = drumBank[synth.timbreId];
+    if (!kit) return;
+    const slotName = DRUM_SLOT_ORDER[(vertexIndex || 0) % DRUM_SLOT_ORDER.length];
+    const buffer = kit[slotName];
+    if (!buffer) return;
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.playbackRate.value = 1;
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.linearRampToValueAtTime(velocity, t + 0.002);
+      const durSec = Math.min(duration, buffer.duration);
+      if (durSec < buffer.duration * 0.8) {
+        gain.gain.setValueAtTime(velocity, t + durSec);
+        gain.gain.linearRampToValueAtTime(0, t + durSec + 0.04);
+      }
+      src.connect(gain);
+      gain.connect(masterGain);
+      src.start(t);
+      const endTime = t + Math.min(durSec + 0.1, buffer.duration) + 0.05;
+      trackVoice({ src, gain, endTime });
+      setTimeout(() => {
+        try { src.disconnect(); } catch (e) {}
+        try { gain.disconnect(); } catch (e) {}
+      }, Math.max(50, (endTime - now + 0.1) * 1000));
+    } catch (e) {}
+    return;
+  }
+
+  if (!sampleBank) return;
   const pitches = stepData.pitches || [60];
   const durSec = duration;
   const maxChordNotes = Math.min(pitches.length, 3);

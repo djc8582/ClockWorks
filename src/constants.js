@@ -105,14 +105,16 @@ export const TIMBRES = [
   { id: "strings", label: "Strings",  category: "String" },
   { id: "bass",    label: "Bass",     category: "Bass" },
   { id: "subbass", label: "Sub Bass", category: "Bass" },
-  // Drums
-  { id: "kick",    label: "Kick",     category: "Drums" },
-  { id: "snare",   label: "Snare",    category: "Drums" },
-  { id: "hihat",   label: "Hi-Hat",   category: "Drums" },
-  { id: "clap",    label: "Clap",     category: "Drums" },
+  // Drum Kits — each vertex cycles through kick, snare, hihat, perc
+  { id: "drumkit1", label: "Vinyl Kit",  category: "Drums" },
+  { id: "drumkit2", label: "Tight Kit",  category: "Drums" },
+  { id: "drumkit3", label: "Soft Kit",   category: "Drums" },
 ];
 
-export const DRUM_TIMBRES = new Set(["kick", "snare", "hihat", "clap"]);
+export const DRUM_TIMBRES = new Set(["drumkit1", "drumkit2", "drumkit3"]);
+
+// Drum kit slot order: vertex 0=kick, 1=snare, 2=hihat, 3=perc, then repeats
+export const DRUM_SLOTS = ['kick', 'snare', 'hihat', 'perc'];
 
 export const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 
