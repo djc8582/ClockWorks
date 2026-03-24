@@ -1,9 +1,8 @@
 import React, { useMemo } from 'react';
 import { Group, Path, Circle, Line, Skia, vec } from '@shopify/react-native-skia';
-import { COLORS, DIMENSIONS, PITCH } from '../constants.js';
+import { COLORS, DIMENSIONS } from '../constants.js';
 import { getVertexPositions, getStemEndpoint } from '../shapes.js';
 
-// Builds a Skia path for a closed polygon — only called when vertices change
 function makePolygonPath(vertices) {
   const path = Skia.Path.Make();
   if (vertices.length === 0) return path;
@@ -24,44 +23,42 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
   opacity,
   isPanelShape,
   selectedNodeIndex,
-  fireAnimations,
 }) {
   const color = COLORS.shapes[shape.colorIndex % COLORS.shapes.length];
 
-  // Memoize vertex positions — only recalculate when geometry actually changes
   const vertices = useMemo(
     () => getVertexPositions(shape.sides, centerX, centerY, radius * scale),
     [shape.sides, centerX, centerY, radius, scale]
   );
 
-  // Memoize the Skia polygon path — only recreate when vertex positions change
   const polygonPath = useMemo(
     () => makePolygonPath(vertices),
     [vertices]
   );
 
+  // Memoize stem endpoints + vec objects to avoid recreating every render
+  const stemData = useMemo(() => {
+    return shape.vertices.map((v, i) => {
+      const pos = vertices[i];
+      if (!pos || v.muted) return null;
+      const mainPitch = v.pitches ? v.pitches[0] : 60;
+      const stemEnd = getStemEndpoint(pos.x, pos.y, centerX, centerY, mainPitch);
+      return {
+        p1: vec(pos.x, pos.y),
+        p2: vec(stemEnd.x, stemEnd.y),
+        dotRadius: DIMENSIONS.vertexMinRadius +
+          ((v.velocity || 85) / 127) * (DIMENSIONS.vertexMaxRadius - DIMENSIONS.vertexMinRadius),
+      };
+    });
+  }, [shape.vertices, vertices, centerX, centerY]);
+
   if (vertices.length === 0) return null;
 
-  // Ring stroke paint
-  const ringColor = isPanelShape
-    ? color.main + '33'
-    : color.main + '15';
+  const ringColor = isPanelShape ? color.main + '33' : color.main + '15';
   const ringWidth = isPanelShape ? 2 : 1;
-
-  // Prepare fire scale per vertex (already filtered by shapeId)
-  const fireScales = useMemo(() => {
-    const map = {};
-    if (fireAnimations) {
-      for (const fa of fireAnimations) {
-        map[fa.vertexIndex] = fa.scale || 1;
-      }
-    }
-    return map;
-  }, [fireAnimations]);
 
   return (
     <Group opacity={opacity}>
-      {/* Ring circle (guide) */}
       <Circle
         cx={centerX}
         cy={centerY}
@@ -71,14 +68,7 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
         strokeWidth={ringWidth}
       />
 
-      {/* Polygon fill */}
-      <Path
-        path={polygonPath}
-        color={color.fill}
-        style="fill"
-      />
-
-      {/* Polygon stroke */}
+      <Path path={polygonPath} color={color.fill} style="fill" />
       <Path
         path={polygonPath}
         color={color.main}
@@ -88,7 +78,6 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
         strokeCap="round"
       />
 
-      {/* Stems + vertex dots */}
       {shape.vertices.map((v, i) => {
         const pos = vertices[i];
         if (!pos) return null;
@@ -96,7 +85,7 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
         if (v.muted) {
           return (
             <Circle
-              key={`muted-${i}`}
+              key={`m-${i}`}
               cx={pos.x}
               cy={pos.y}
               r={DIMENSIONS.mutedVertexRadius}
@@ -107,62 +96,43 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
           );
         }
 
-        const mainPitch = v.pitches ? v.pitches[0] : 60;
-        const stemEnd = getStemEndpoint(pos.x, pos.y, centerX, centerY, mainPitch);
-        const dotRadius = DIMENSIONS.vertexMinRadius +
-          (v.velocity / 127) * (DIMENSIONS.vertexMaxRadius - DIMENSIONS.vertexMinRadius);
-        const fScale = fireScales[i] || 1;
-        const finalDotR = dotRadius * fScale;
-
+        const stem = stemData[i];
+        if (!stem) return null;
         const isSelectedNode = isPanelShape && i === selectedNodeIndex;
 
         return (
-          <Group key={`vertex-${i}`}>
-            {/* Stem line */}
+          <Group key={`v-${i}`}>
             <Line
-              p1={vec(pos.x, pos.y)}
-              p2={vec(stemEnd.x, stemEnd.y)}
+              p1={stem.p1}
+              p2={stem.p2}
               color={color.dim}
               style="stroke"
               strokeWidth={DIMENSIONS.stemWidth}
               strokeCap="round"
             />
 
-            {/* Fire glow */}
-            {fScale > 1.05 && (
-              <Circle
-                cx={pos.x}
-                cy={pos.y}
-                r={finalDotR * 1.5}
-                color={color.glow}
-              />
-            )}
-
-            {/* Selection ring */}
             {isPanelShape && (
               <Circle
                 cx={pos.x}
                 cy={pos.y}
-                r={finalDotR + (isSelectedNode ? 8 : 5)}
+                r={stem.dotRadius + (isSelectedNode ? 8 : 5)}
                 color={isSelectedNode ? color.main : color.glow}
                 style="stroke"
                 strokeWidth={isSelectedNode ? 2.5 : 1.5}
               />
             )}
 
-            {/* Main vertex dot */}
             <Circle
               cx={pos.x}
               cy={pos.y}
-              r={finalDotR}
+              r={stem.dotRadius}
               color={color.main}
             />
 
-            {/* White highlight */}
             <Circle
-              cx={pos.x - finalDotR * 0.2}
-              cy={pos.y - finalDotR * 0.25}
-              r={finalDotR * 0.35}
+              cx={pos.x - stem.dotRadius * 0.2}
+              cy={pos.y - stem.dotRadius * 0.25}
+              r={stem.dotRadius * 0.35}
               color="rgba(255,255,255,0.5)"
             />
           </Group>

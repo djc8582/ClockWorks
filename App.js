@@ -1,15 +1,12 @@
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { View, StyleSheet, StatusBar, Pressable, Text, useWindowDimensions } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { initState, getState, getShapes, updateState } from './src/state.js';
+import { initState, updateState } from './src/state.js';
 import { initSequencer } from './src/sequencer.js';
-import { setNoteCallback } from './src/audio/audioEngine.js';
 import { useStore } from './src/hooks/useStore.js';
 import { COLORS } from './src/constants.js';
-import { calculateRingRadii, getVertexPositions } from './src/shapes.js';
-import { DIMENSIONS, TIMING } from './src/constants.js';
 import { addNewShape } from './src/gestures/canvasGestures.js';
 
 import CanvasView from './src/rendering/CanvasView.js';
@@ -24,109 +21,18 @@ import Mixer from './src/ui/Mixer.js';
 initState();
 initSequencer();
 
-// ── Animation pool constants ─────────────────────────────────
-// Use a fixed-size pool with recycling instead of unbounded array growth.
-const MAX_FIRE_ANIMATIONS = 20;
-const MAX_SPOKE_ANIMATIONS = 20;
-
-const MIN_PANEL_HEIGHT = 120;
-const MAX_PANEL_FRACTION = 0.75;
 const DEFAULT_PANEL_FRACTION = 0.45;
 
 function AppContent() {
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
 
-  // Animation state for fire/spoke (simplified — driven by note callbacks)
-  const [fireAnimations, setFireAnimations] = useState([]);
-  const [spokeAnimations, setSpokeAnimations] = useState([]);
   const [canvasLayout, setCanvasLayout] = useState({ width: 300, height: 300 });
   const panelHeight = Math.round(screenHeight * DEFAULT_PANEL_FRACTION);
 
-  // Track pending timeouts for cleanup on unmount
-  const pendingTimers = useRef(new Set());
-  const animIdCounter = useRef(0);
-
-  // Canvas layout info for fire animation positioning
   const onCanvasLayout = useCallback((layout) => {
     setCanvasLayout(layout);
   }, []);
-
-  // Clean up all pending timers on unmount
-  useEffect(() => {
-    const timers = pendingTimers.current;
-    return () => {
-      for (const t of timers) {
-        clearTimeout(t);
-      }
-      timers.clear();
-    };
-  }, []);
-
-  // Note trigger callback — creates fire/spoke animations
-  useEffect(() => {
-    setNoteCallback((shape, vertexIndex) => {
-      const centerX = canvasLayout.width / 2;
-      const centerY = canvasLayout.height / 2;
-      const maxR = Math.min(centerX, centerY) * DIMENSIONS.maxRadiusFraction;
-      const minR = maxR * DIMENSIONS.minRadiusFraction;
-      const zoom = getState().ui.canvasZoom || 1.0;
-      const shapes = getShapes();
-      const radii = calculateRingRadii(shapes.length, maxR * zoom, minR * zoom);
-      const si = shapes.findIndex(s => s.id === shape.id);
-      if (si === -1 || si >= radii.length) return;
-      const positions = getVertexPositions(shape.sides, centerX, centerY, radii[si]);
-      const pos = positions[vertexIndex];
-      if (!pos) return;
-
-      const color = COLORS.shapes[shape.colorIndex % COLORS.shapes.length];
-      // Use incrementing counter instead of Date.now() + Math.random()
-      const id = ++animIdCounter.current;
-
-      // Add fire animation — hard cap with simple truncation (no slice copies)
-      setFireAnimations(prev => {
-        const next = prev.length >= MAX_FIRE_ANIMATIONS
-          ? prev.slice(-(MAX_FIRE_ANIMATIONS - 5))
-          : prev;
-        return [...next, {
-          id,
-          shapeId: shape.id,
-          vertexIndex,
-          x: pos.x,
-          y: pos.y,
-          color: color.main,
-          bloomRadius: 0,
-          bloomOpacity: 0.6,
-          scale: 1.5,
-        }];
-      });
-
-      // Add spoke animation — hard cap
-      setSpokeAnimations(prev => {
-        const next = prev.length >= MAX_SPOKE_ANIMATIONS
-          ? prev.slice(-(MAX_SPOKE_ANIMATIONS - 5))
-          : prev;
-        return [...next, {
-          id,
-          x: pos.x,
-          y: pos.y,
-          centerX,
-          centerY,
-          color: color.dim,
-          opacity: 0.4,
-        }];
-      });
-
-      // Remove after animation duration — track timer for cleanup
-      const timer = setTimeout(() => {
-        pendingTimers.current.delete(timer);
-        setFireAnimations(prev => prev.filter(f => f.id !== id));
-        setSpokeAnimations(prev => prev.filter(s => s.id !== id));
-      }, TIMING.fireAnimationDuration);
-
-      pendingTimers.current.add(timer);
-    });
-  }, [canvasLayout]);
 
   // Get panel shape info — use panelSceneIndex so auto-advance doesn't
   // switch what the user is editing
@@ -172,11 +78,7 @@ function AppContent() {
       {/* Normal view — hidden when mixer is open, stays mounted */}
       <View style={mixerOpen ? styles.hidden : { flex: 1 }}>
         {/* Canvas area */}
-        <CanvasView
-          fireAnimations={fireAnimations}
-          spokeAnimations={spokeAnimations}
-          onLayout={onCanvasLayout}
-        />
+        <CanvasView onLayout={onCanvasLayout} />
 
         {/* Scene strip */}
         <SceneStrip />

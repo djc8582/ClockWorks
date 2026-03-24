@@ -5,7 +5,6 @@ import { GestureDetector } from 'react-native-gesture-handler';
 import ShapeRenderer from './ShapeRenderer.js';
 import ClockHand from './ClockHand.js';
 import GhostRing from './GhostRing.js';
-import { FireAnimations, SpokeAnimations } from './Animations.js';
 import { COLORS, DIMENSIONS, MAX_SHAPES } from '../constants.js';
 import { calculateRingRadii } from '../shapes.js';
 import { useStore } from '../hooks/useStore.js';
@@ -13,13 +12,8 @@ import { useCanvasGestures } from '../gestures/canvasGestures.js';
 import { useClockSync } from '../hooks/useClockSync.js';
 import { getGhostRadius } from '../gestures/hitTesting.js';
 
-export default function CanvasView({
-  fireAnimations,
-  spokeAnimations,
-  onLayout: onLayoutProp,
-}) {
+export default React.memo(function CanvasView({ onLayout: onLayoutProp }) {
   const [layout, setLayout] = useState({ width: 300, height: 300 });
-  // clockAngle is now a Reanimated shared value — does NOT trigger React re-renders
   const clockAngle = useClockSync();
 
   const onLayout = useCallback((e) => {
@@ -50,40 +44,24 @@ export default function CanvasView({
     [shapes.length, zMaxR, zMinR]
   );
 
-  // Pre-index fireAnimations by shapeId to avoid O(n) scan per ShapeRenderer
-  const firesByShape = useMemo(() => {
-    const map = {};
-    if (fireAnimations) {
-      for (const fa of fireAnimations) {
-        if (!map[fa.shapeId]) map[fa.shapeId] = [];
-        map[fa.shapeId].push(fa);
-      }
-    }
-    return map;
-  }, [fireAnimations]);
-
   const gesture = useCanvasGestures({
     centerX, centerY, maxRadius: zMaxR, minRadius: zMinR,
     width: layout.width, height: layout.height,
   });
 
-  // Clock hand length — extend past outermost ring
   const handLength = radii.length > 0
     ? radii[radii.length - 1] + 40
     : zMaxR + 40;
 
-  // Ghost ring
   const showGhost = shapes.length < MAX_SHAPES && !addPanelOpen;
   const ghostR = showGhost ? getGhostRadius(shapes.length, radii, zMaxR) : 0;
 
-  // Memoize gradient center vec to avoid re-creating every render
   const gradientCenter = useMemo(() => vec(centerX, centerY), [centerX, centerY]);
   const gradientRadius = useMemo(
     () => Math.max(layout.width, layout.height) * 0.7,
     [layout.width, layout.height]
   );
 
-  // Play/pause icon paths — consistent size for the center button
   const playPath = useMemo(
     () => `M ${centerX - 8} ${centerY - 14} L ${centerX + 14} ${centerY} L ${centerX - 8} ${centerY + 14} Z`,
     [centerX, centerY]
@@ -126,7 +104,6 @@ export default function CanvasView({
                 opacity={opacity}
                 isPanelShape={isPanelShape}
                 selectedNodeIndex={selectedNodeIndex}
-                fireAnimations={firesByShape[shape.id]}
               />
             );
           })}
@@ -151,11 +128,7 @@ export default function CanvasView({
             />
           )}
 
-          {/* Fire + spoke animations */}
-          <FireAnimations fires={fireAnimations} />
-          <SpokeAnimations spokes={spokeAnimations} />
-
-          {/* Unified play/pause button — same style always */}
+          {/* Unified play/pause button */}
           <Group>
             {!audioStarted && (
               <Rect x={0} y={0} width={layout.width} height={layout.height} color="rgba(0,0,0,0.15)" />
@@ -175,7 +148,6 @@ export default function CanvasView({
       </GestureDetector>
     </View>
   );
-}
+});
 
-// Static gradient colors array — never changes, so define outside component
 const GRADIENT_COLORS = [COLORS.bgGradientCenter, COLORS.bg];
