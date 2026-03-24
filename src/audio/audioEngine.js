@@ -1,7 +1,7 @@
 import { AudioContext } from 'react-native-audio-api';
 import { getState, getShapes, updateState } from '../state.js';
 import { TIMING } from '../constants.js';
-import { createTimbre, triggerTimbre } from './timbres.js';
+import { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices } from './timbres.js';
 import { createScheduler } from './scheduler.js';
 
 let audioContext = null;
@@ -11,9 +11,7 @@ let cycleDuration = 2;
 let masterGain = null;
 let synthMap = new Map();
 let onNoteTriggered = null;
-
-// Track which events have fired this cycle
-let lastFireTimes = {};
+let masterGainValue = 0.7;  // Track gain in JS to avoid .value getter issues
 
 function setNoteCallback(cb) { onNoteTriggered = cb; }
 
@@ -23,7 +21,8 @@ function velocityToGain(velocity) {
 
 function getNoteDuration(shape) {
   const sub = shape.subdivision || 1;
-  const interval = cycleDuration / (shape.sides * sub);
+  const sides = shape.sides || 1;
+  const interval = cycleDuration / (sides * sub);
   return Math.min(interval * 0.6, 0.5);
 }
 
@@ -36,22 +35,26 @@ function initAudio() {
     if (audioContext.resume) audioContext.resume();
 
     masterGain = audioContext.createGain();
-    masterGain.gain.value = 0.8;
+    masterGain.gain.value = 0.7;
     masterGain.connect(audioContext.destination);
+
+    initSampleBank(audioContext);
 
     updateCycleDuration();
     scheduler = createScheduler(audioContext, cycleDuration, onSchedulerTick);
     audioInitialized = true;
     scheduler.start();
   } catch (e) {
-    console.warn('[audio] Init failed:', e);
+    console.warn('[audio] Init failed:', e?.message || e);
     audioInitialized = false;
   }
 }
 
 function updateCycleDuration() {
   const state = getState();
-  cycleDuration = (60 / state.bpm) * TIMING.defaultCycleBeats;
+  const bpm = state.bpm || 120;
+  cycleDuration = (60 / bpm) * TIMING.defaultCycleBeats;
+  if (cycleDuration <= 0) cycleDuration = 2;
   if (scheduler) scheduler.setCycleDuration(cycleDuration);
 }
 
@@ -66,7 +69,7 @@ function updateBPM(newBPM) {
 // ── Synth management ─────────────────────────────────────────
 function ensureSynth(shape) {
   if (!audioContext) return null;
-  const timbre = shape.timbre || 'bell';
+  const timbre = shape.timbre || 'epiano';
   let synth = synthMap.get(timbre);
   if (!synth) {
     synth = createTimbre(audioContext, timbre);
@@ -78,64 +81,67 @@ function ensureSynth(shape) {
 function swapTimbre(shape) { ensureSynth(shape); }
 
 function cleanupOrphanedSynths() {
-  const usedTimbres = new Set(getShapes().map(s => s.timbre || 'bell'));
+  const usedTimbres = new Set(getShapes().map(s => s.timbre || 'epiano'));
   for (const [timbre] of synthMap) {
     if (!usedTimbres.has(timbre)) synthMap.delete(timbre);
   }
 }
 
-// ── Scheduler tick ──────────────────────────────────────────
-// Called every 25ms with the current loop position.
-// Checks which events should fire and plays them immediately.
-function onSchedulerTick(loopPos, now) {
-  const shapes = getShapes();
+// ── Scheduler tick (non-overlapping window approach) ─────────
+// The scheduler guarantees [scheduleFrom, scheduleTo) windows never overlap,
+// so every event fires exactly once — no deduplication needed.
+function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
+  try {
+    const shapes = getShapes();
+    if (!shapes || shapes.length === 0) return;
+    if (!cycleDur || cycleDur <= 0) return;
 
-  for (const shape of shapes) {
-    const synth = ensureSynth(shape);
-    if (!synth) continue;
+    for (const shape of shapes) {
+      if (!shape || !shape.vertices) continue;
+      const synth = ensureSynth(shape);
+      if (!synth) continue;
 
-    const sides = shape.sides;
-    const sub = shape.subdivision || 1;
-    const interval = cycleDuration / sides;
-    const subInterval = interval / sub;
+      const sides = shape.sides;
+      if (!sides || sides <= 0) continue;
+      const sub = shape.subdivision || 1;
+      const interval = cycleDur / sides;
+      const subInterval = interval / sub;
 
-    for (let i = 0; i < sides; i++) {
-      for (let s = 0; s < sub; s++) {
-        const eventTime = i * interval + s * subInterval;
-        const eventKey = `${shape.id}-${i}-${s}`;
+      // Determine which cycles overlap our schedule window
+      const relFrom = scheduleFrom - transportStart;
+      const relTo = scheduleTo - transportStart;
+      const firstCycle = Math.max(0, Math.floor(relFrom / cycleDur));
+      const lastCycle = Math.floor(relTo / cycleDur);
 
-        // Check if we've passed this event's time
-        // Use a window: event fires if loopPos is within [eventTime, eventTime + window)
-        const window = 0.04; // 40ms window
-        let diff = loopPos - eventTime;
-        // Handle wrap-around
-        if (diff < -cycleDuration / 2) diff += cycleDuration;
-        if (diff > cycleDuration / 2) diff -= cycleDuration;
+      for (let cycle = firstCycle; cycle <= lastCycle; cycle++) {
+        const cycleStart = transportStart + cycle * cycleDur;
 
-        if (diff >= 0 && diff < window) {
-          // Dedup: skip if this event already fired within 50ms
-          const lastFire = lastFireTimes[eventKey];
-          if (lastFire !== undefined && now - lastFire < 0.08) continue;
-          lastFireTimes[eventKey] = now;
+        for (let i = 0; i < sides; i++) {
+          for (let s = 0; s < sub; s++) {
+            const eventTime = cycleStart + i * interval + s * subInterval;
+            if (eventTime < scheduleFrom || eventTime >= scheduleTo) continue;
 
-          const v = shape.vertices[i];
-          if (!v) continue;
-          const stepData = s === 0 ? v : (v.subs && v.subs[s - 1]);
-          if (!stepData || stepData.muted) continue;
+            const v = shape.vertices[i];
+            if (!v) continue;
+            const stepData = s === 0 ? v : (v.subs && v.subs[s - 1]);
+            if (!stepData || stepData.muted) continue;
 
-          const vel = velocityToGain(stepData.velocity);
-          const dur = getNoteDuration(shape);
+            const vel = velocityToGain(stepData.velocity || 85) * (shape.volume != null ? shape.volume : 1);
+            const dur = getNoteDuration(shape);
 
-          try {
-            triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur);
-          } catch (e) {}
+            try {
+              triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur, eventTime);
+            } catch (e) {}
 
-          if (s === 0 && onNoteTriggered) {
-            onNoteTriggered(shape, i);
+            if (s === 0 && onNoteTriggered) {
+              try { onNoteTriggered(shape, i); } catch (e) {}
+            }
           }
         }
       }
     }
+  } catch (e) {
+    // Never let scheduler errors crash the app
   }
 }
 
@@ -144,7 +150,7 @@ function triggerStep(shape, stepData, vertexIndex) {
   if (!stepData || stepData.muted || !audioContext || !masterGain) return;
   const synth = ensureSynth(shape);
   if (!synth) return;
-  const vel = velocityToGain(stepData.velocity);
+  const vel = velocityToGain(stepData.velocity || 85);
   const dur = getNoteDuration(shape);
   try {
     triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur);
@@ -152,13 +158,17 @@ function triggerStep(shape, stepData, vertexIndex) {
 }
 
 function triggerNote(shape, vertexIndex) {
+  if (!shape || !shape.vertices) return;
   const v = shape.vertices[vertexIndex];
   if (!v || v.muted) return;
   triggerStep(shape, v, vertexIndex);
-  if (onNoteTriggered) onNoteTriggered(shape, vertexIndex);
+  if (onNoteTriggered) {
+    try { onNoteTriggered(shape, vertexIndex); } catch (e) {}
+  }
 }
 
 function playPreview(shape, vertexIndex, stepIndex) {
+  if (!shape || !shape.vertices) return;
   const v = shape.vertices[vertexIndex];
   if (!v || !audioInitialized) return;
   const stepData = (stepIndex && stepIndex > 0 && v.subs) ? v.subs[stepIndex - 1] : v;
@@ -167,13 +177,56 @@ function playPreview(shape, vertexIndex, stepIndex) {
 }
 
 // ── Reschedule ──────────────────────────────────────────────
+function getTargetGain() {
+  try {
+    const shapes = getShapes();
+    const count = Math.max(1, shapes.length);
+    return 0.7 / Math.sqrt(count);
+  } catch (e) {
+    return 0.7;
+  }
+}
+
 function rescheduleAll() {
-  lastFireTimes = {};
   updateCycleDuration();
   if (audioInitialized && scheduler) {
     cleanupOrphanedSynths();
-    scheduler.stop();
-    scheduler.start();
+  }
+  // Scale master gain to prevent clipping with multiple shapes
+  if (audioContext && masterGain) {
+    try {
+      const target = getTargetGain();
+      const now = audioContext.currentTime;
+      // cancelScheduledValues crashes react-native-audio-api@0.6.5 (null deque iterator)
+      masterGain.gain.setValueAtTime(masterGainValue, now);
+      masterGain.gain.linearRampToValueAtTime(target, now + 0.05);
+      masterGainValue = target;
+    } catch (e) {}
+  }
+}
+
+// Scene transition: fade old voices out, keep master gain steady.
+// No masterGain dip — new scene notes start immediately on the next
+// scheduler tick, so the crossfade is old voices fading out while
+// new voices fade in naturally via their attack envelopes.
+function transitionScene() {
+  if (audioContext) fadeOutAllVoices(audioContext);
+  updateCycleDuration();
+  if (audioInitialized && scheduler) {
+    cleanupOrphanedSynths();
+    // Reset schedule window so the new scene's beat-0 notes are picked up
+    // immediately instead of waiting for the next tick window.
+    scheduler.resetScheduleWindow();
+  }
+  // Update master gain for new scene's shape count (no dip)
+  if (audioContext && masterGain) {
+    try {
+      const target = getTargetGain();
+      const now = audioContext.currentTime;
+      masterGain.gain.setValueAtTime(masterGainValue, now);
+      masterGain.gain.linearRampToValueAtTime(target, now + 0.05);
+      masterGainValue = target;
+    } catch (e) {}
   }
 }
 
@@ -187,7 +240,7 @@ function getTransportSeconds() {
 }
 
 export {
-  initAudio, updateBPM, rescheduleAll, triggerNote, playPreview,
+  initAudio, updateBPM, rescheduleAll, transitionScene, triggerNote, playPreview,
   swapTimbre, isAudioInitialized, getTransportSeconds,
   getCycleDuration, ensureSynth, setNoteCallback, getAudioContext,
 };

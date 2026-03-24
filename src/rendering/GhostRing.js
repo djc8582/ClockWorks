@@ -1,5 +1,5 @@
-import React from 'react';
-import { Group, Circle, Path, DashPathEffect, Skia, Text, useFont } from '@shopify/react-native-skia';
+import React, { useMemo } from 'react';
+import { Group, Circle, Path, DashPathEffect, Skia } from '@shopify/react-native-skia';
 import { COLORS, DIMENSIONS } from '../constants.js';
 
 const GhostRing = React.memo(function GhostRing({ radius, centerX, centerY, hover }) {
@@ -14,9 +14,12 @@ const GhostRing = React.memo(function GhostRing({ radius, centerX, centerY, hove
   const iconBg = hover ? COLORS.buttonHover : COLORS.buttonBg;
   const iconBorder = hover ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.15)';
 
-  // Build dashed circle path
-  const dashPath = Skia.Path.Make();
-  dashPath.addCircle(centerX, centerY, radius);
+  // Memoize dashed circle path — only recreate when geometry changes
+  const dashPath = useMemo(() => {
+    const p = Skia.Path.Make();
+    p.addCircle(centerX, centerY, radius);
+    return p;
+  }, [centerX, centerY, radius]);
 
   return (
     <Group>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { View, StyleSheet, StatusBar, Pressable, Text } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,10 +18,16 @@ import SceneStrip from './src/ui/SceneStrip.js';
 import PanelHeader from './src/ui/PanelHeader.js';
 import TimbreRow from './src/ui/TimbreRow.js';
 import PianoRoll from './src/ui/PianoRoll.js';
+import Mixer from './src/ui/Mixer.js';
 
 // Initialize state on module load
 initState();
 initSequencer();
+
+// ── Animation pool constants ─────────────────────────────────
+// Use a fixed-size pool with recycling instead of unbounded array growth.
+const MAX_FIRE_ANIMATIONS = 20;
+const MAX_SPOKE_ANIMATIONS = 20;
 
 function AppContent() {
   const insets = useSafeAreaInsets();
@@ -31,9 +37,24 @@ function AppContent() {
   const [spokeAnimations, setSpokeAnimations] = useState([]);
   const [canvasLayout, setCanvasLayout] = useState({ width: 300, height: 300 });
 
+  // Track pending timeouts for cleanup on unmount
+  const pendingTimers = useRef(new Set());
+  const animIdCounter = useRef(0);
+
   // Canvas layout info for fire animation positioning
   const onCanvasLayout = useCallback((layout) => {
     setCanvasLayout(layout);
+  }, []);
+
+  // Clean up all pending timers on unmount
+  useEffect(() => {
+    const timers = pendingTimers.current;
+    return () => {
+      for (const t of timers) {
+        clearTimeout(t);
+      }
+      timers.clear();
+    };
   }, []);
 
   // Note trigger callback — creates fire/spoke animations
@@ -53,49 +74,69 @@ function AppContent() {
       if (!pos) return;
 
       const color = COLORS.shapes[shape.colorIndex % COLORS.shapes.length];
-      const id = Date.now() + Math.random();
+      // Use incrementing counter instead of Date.now() + Math.random()
+      const id = ++animIdCounter.current;
 
-      // Add fire animation
-      setFireAnimations(prev => [...prev, {
-        id,
-        shapeId: shape.id,
-        vertexIndex,
-        x: pos.x,
-        y: pos.y,
-        color: color.main,
-        bloomRadius: 0,
-        bloomOpacity: 0.6,
-        scale: 1.5,
-      }]);
+      // Add fire animation — hard cap with simple truncation (no slice copies)
+      setFireAnimations(prev => {
+        const next = prev.length >= MAX_FIRE_ANIMATIONS
+          ? prev.slice(-(MAX_FIRE_ANIMATIONS - 5))
+          : prev;
+        return [...next, {
+          id,
+          shapeId: shape.id,
+          vertexIndex,
+          x: pos.x,
+          y: pos.y,
+          color: color.main,
+          bloomRadius: 0,
+          bloomOpacity: 0.6,
+          scale: 1.5,
+        }];
+      });
 
-      // Add spoke animation
-      setSpokeAnimations(prev => [...prev, {
-        id,
-        x: pos.x,
-        y: pos.y,
-        centerX,
-        centerY,
-        color: color.dim,
-        opacity: 0.4,
-      }]);
+      // Add spoke animation — hard cap
+      setSpokeAnimations(prev => {
+        const next = prev.length >= MAX_SPOKE_ANIMATIONS
+          ? prev.slice(-(MAX_SPOKE_ANIMATIONS - 5))
+          : prev;
+        return [...next, {
+          id,
+          x: pos.x,
+          y: pos.y,
+          centerX,
+          centerY,
+          color: color.dim,
+          opacity: 0.4,
+        }];
+      });
 
-      // Remove after animation duration
-      setTimeout(() => {
+      // Remove after animation duration — track timer for cleanup
+      const timer = setTimeout(() => {
+        pendingTimers.current.delete(timer);
         setFireAnimations(prev => prev.filter(f => f.id !== id));
         setSpokeAnimations(prev => prev.filter(s => s.id !== id));
       }, TIMING.fireAnimationDuration);
+
+      pendingTimers.current.add(timer);
     });
   }, [canvasLayout]);
 
-  // Get panel shape info
+  // Get panel shape info — use panelSceneIndex so auto-advance doesn't
+  // switch what the user is editing
   const panelShapeId = useStore(s => s.ui.panelShapeId);
-  const shapes = useStore(s => s.scenes[s.activeSceneIndex].shapes);
+  const panelSceneIndex = useStore(s => s.ui.panelSceneIndex);
+  const panelShapes = useStore(s => {
+    const idx = Math.min(s.ui.panelSceneIndex, s.scenes.length - 1);
+    return s.scenes[idx]?.shapes || [];
+  });
+  const mixerOpen = useStore(s => s.ui.mixerOpen);
   const addPanelOpen = useStore(s => s.ui.addPanelOpen);
   const addPanelSides = useStore(s => s.ui.addPanelSides);
 
   const panelShape = useMemo(() =>
-    panelShapeId ? shapes.find(s => s.id === panelShapeId) : (shapes[0] || null),
-    [panelShapeId, shapes]
+    panelShapeId ? panelShapes.find(s => s.id === panelShapeId) : (panelShapes[0] || null),
+    [panelShapeId, panelShapes]
   );
 
   const panelColor = panelShape
@@ -104,36 +145,42 @@ function AppContent() {
 
   // Ensure panel always has a shape selected
   useEffect(() => {
-    if (!panelShapeId && shapes.length > 0) {
+    if (!panelShapeId && panelShapes.length > 0) {
       updateState(s => {
-        s.ui.panelShapeId = shapes[0].id;
+        s.ui.panelShapeId = panelShapes[0].id;
         s.ui.selectedNodeIndex = 0;
       });
     }
-  }, [panelShapeId, shapes]);
+  }, [panelShapeId, panelShapes]);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" />
 
-      {/* Top bar: BPM + scale */}
+      {/* Top bar: BPM + mixer toggle */}
       <TopBar />
 
-      {/* Canvas area */}
-      <CanvasView
-        fireAnimations={fireAnimations}
-        spokeAnimations={spokeAnimations}
-        onLayout={onCanvasLayout}
-      />
+      {/* Mixer — shown/hidden without unmounting */}
+      {mixerOpen && <Mixer />}
 
-      {/* Scene strip */}
-      <SceneStrip />
+      {/* Normal view — hidden when mixer is open, stays mounted */}
+      <View style={mixerOpen ? styles.hidden : { flex: 1 }}>
+        {/* Canvas area */}
+        <CanvasView
+          fireAnimations={fireAnimations}
+          spokeAnimations={spokeAnimations}
+          onLayout={onCanvasLayout}
+        />
 
-      {/* Bottom panel: piano roll */}
-      <View style={[styles.bottomPanel, { paddingBottom: insets.bottom }]}>
-        <PanelHeader shape={panelShape} color={panelColor} />
-        <TimbreRow shape={panelShape} color={panelColor} />
-        <PianoRoll shape={panelShape} color={panelColor} />
+        {/* Scene strip */}
+        <SceneStrip />
+
+        {/* Bottom panel: piano roll */}
+        <View style={[styles.bottomPanel, { paddingBottom: insets.bottom }]}>
+          <PanelHeader shape={panelShape} color={panelColor} />
+          <TimbreRow shape={panelShape} color={panelColor} />
+          <PianoRoll shape={panelShape} color={panelColor} />
+        </View>
       </View>
 
       {/* Add shape panel overlay */}
@@ -197,6 +244,12 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  hidden: {
+    position: 'absolute',
+    width: 0,
+    height: 0,
+    overflow: 'hidden',
+  },
   container: {
     flex: 1,
     backgroundColor: COLORS.bg,

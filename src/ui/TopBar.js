@@ -1,20 +1,17 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { View, Text, Pressable, StyleSheet, Modal, FlatList } from 'react-native';
+import React, { useCallback, useEffect } from 'react';
+import { View, Text, Pressable, StyleSheet } from 'react-native';
 import Slider from '@react-native-community/slider';
-import { COLORS, SCALE_DEFINITIONS, NOTE_NAMES } from '../constants.js';
+import { COLORS } from '../constants.js';
 import { updateState } from '../state.js';
-import { updateBPM, rescheduleAll } from '../audio/audioEngine.js';
-import { setScalePreset, getCurrentScaleName } from '../scale.js';
+import { updateBPM } from '../audio/audioEngine.js';
 import { useStore } from '../hooks/useStore.js';
 
 export default React.memo(function TopBar() {
   const bpm = useStore(s => s.bpm);
-  const [scalePickerVisible, setScalePickerVisible] = useState(false);
-  const scaleName = getCurrentScaleName();
+  const mixerOpen = useStore(s => s.ui.mixerOpen);
 
   const debounceRef = React.useRef(null);
 
-  // Cleanup debounce timeout on unmount
   useEffect(() => {
     return () => clearTimeout(debounceRef.current);
   }, []);
@@ -26,28 +23,12 @@ export default React.memo(function TopBar() {
     debounceRef.current = setTimeout(() => updateBPM(newBpm), 50);
   }, []);
 
-  const scaleOptions = React.useMemo(() => {
-    const options = [];
-    for (const [name] of Object.entries(SCALE_DEFINITIONS)) {
-      for (let root = 0; root < 12; root++) {
-        const rootName = NOTE_NAMES[root];
-        const label = name === "Chromatic" ? name : `${rootName} ${name}`;
-        if (name === "Chromatic" && root > 0) continue;
-        options.push({ name, root, label });
-      }
-    }
-    return options;
-  }, []);
-
-  function onScaleSelect(item) {
-    setScalePreset(item.name, item.root);
-    rescheduleAll();
-    setScalePickerVisible(false);
+  function toggleMixer() {
+    updateState(s => { s.ui.mixerOpen = !s.ui.mixerOpen; });
   }
 
   return (
     <View style={styles.container}>
-      {/* BPM slider */}
       <View style={styles.bpmGroup}>
         <Text style={styles.bpmLabel}>{bpm} BPM</Text>
         <Slider
@@ -62,43 +43,12 @@ export default React.memo(function TopBar() {
         />
       </View>
 
-      {/* Scale picker */}
       <Pressable
-        style={styles.scaleBtn}
-        onPress={() => setScalePickerVisible(true)}
+        style={[styles.mixerBtn, mixerOpen && styles.mixerBtnActive]}
+        onPress={toggleMixer}
       >
-        <Text style={styles.scaleBtnText}>{scaleName}</Text>
+        <Text style={[styles.mixerBtnText, mixerOpen && styles.mixerBtnTextActive]}>Mixer</Text>
       </Pressable>
-
-      {/* Scale picker modal */}
-      <Modal
-        visible={scalePickerVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setScalePickerVisible(false)}
-      >
-        <Pressable
-          style={styles.modalBackdrop}
-          onPress={() => setScalePickerVisible(false)}
-        >
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Scale</Text>
-            <FlatList
-              data={scaleOptions}
-              keyExtractor={(item) => `${item.name}-${item.root}`}
-              renderItem={({ item }) => (
-                <Pressable
-                  style={styles.scaleItem}
-                  onPress={() => onScaleSelect(item)}
-                >
-                  <Text style={styles.scaleItemText}>{item.label}</Text>
-                </Pressable>
-              )}
-              style={styles.scaleList}
-            />
-          </View>
-        </Pressable>
-      </Modal>
     </View>
   );
 });
@@ -128,50 +78,21 @@ const styles = StyleSheet.create({
     flex: 1,
     height: 28,
   },
-  scaleBtn: {
-    paddingHorizontal: 12,
+  mixerBtn: {
+    paddingHorizontal: 14,
     paddingVertical: 6,
     backgroundColor: 'rgba(0,0,0,0.05)',
     borderRadius: 12,
   },
-  scaleBtnText: {
+  mixerBtnActive: {
+    backgroundColor: COLORS.text,
+  },
+  mixerBtnText: {
     fontSize: 12,
-    fontWeight: '500',
-    color: COLORS.text,
-  },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalContent: {
-    width: 260,
-    maxHeight: 400,
-    backgroundColor: COLORS.panelBg,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  modalTitle: {
-    fontSize: 15,
     fontWeight: '600',
     color: COLORS.text,
-    textAlign: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
   },
-  scaleList: {
-    maxHeight: 340,
-  },
-  scaleItem: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
-  },
-  scaleItemText: {
-    fontSize: 14,
-    color: COLORS.text,
+  mixerBtnTextActive: {
+    color: '#fff',
   },
 });

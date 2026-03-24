@@ -11,15 +11,7 @@ import { calculateRingRadii } from '../shapes.js';
 import { useStore } from '../hooks/useStore.js';
 import { useCanvasGestures } from '../gestures/canvasGestures.js';
 import { useClockSync } from '../hooks/useClockSync.js';
-
-function getGhostRadius(shapeCount, radii, maxR) {
-  if (shapeCount === 0) return maxR * 0.5;
-  const outermost = radii[radii.length - 1];
-  const gap = shapeCount > 1
-    ? (radii[radii.length - 1] - radii[radii.length - 2])
-    : outermost * 0.4;
-  return Math.min(outermost + gap * 0.7, maxR * 1.15);
-}
+import { getGhostRadius } from '../gestures/hitTesting.js';
 
 export default function CanvasView({
   fireAnimations,
@@ -27,6 +19,7 @@ export default function CanvasView({
   onLayout: onLayoutProp,
 }) {
   const [layout, setLayout] = useState({ width: 300, height: 300 });
+  // clockAngle is now a Reanimated shared value — does NOT trigger React re-renders
   const clockAngle = useClockSync();
 
   const onLayout = useCallback((e) => {
@@ -35,12 +28,14 @@ export default function CanvasView({
     if (onLayoutProp) onLayoutProp({ width, height });
   }, [onLayoutProp]);
 
-  const centerX = layout.width / 2;
-  const centerY = layout.height / 2;
-  const maxRadius = Math.min(centerX, centerY) * DIMENSIONS.maxRadiusFraction;
-  const minRadius = maxRadius * DIMENSIONS.minRadiusFraction;
+  const { centerX, centerY, maxRadius, minRadius } = useMemo(() => {
+    const cx = layout.width / 2;
+    const cy = layout.height / 2;
+    const maxR = Math.min(cx, cy) * DIMENSIONS.maxRadiusFraction;
+    return { centerX: cx, centerY: cy, maxRadius: maxR, minRadius: maxR * DIMENSIONS.minRadiusFraction };
+  }, [layout.width, layout.height]);
 
-  const shapes = useStore(s => s.scenes[s.activeSceneIndex].shapes);
+  const shapes = useStore(s => s.scenes[s.activeSceneIndex]?.shapes || []);
   const canvasZoom = useStore(s => s.ui.canvasZoom || 1.0);
   const panelShapeId = useStore(s => s.ui.panelShapeId);
   const selectedNodeIndex = useStore(s => s.ui.selectedNodeIndex);
@@ -54,19 +49,44 @@ export default function CanvasView({
     [shapes.length, zMaxR, zMinR]
   );
 
+  // Pre-index fireAnimations by shapeId to avoid O(n) scan per ShapeRenderer
+  const firesByShape = useMemo(() => {
+    const map = {};
+    if (fireAnimations) {
+      for (const fa of fireAnimations) {
+        if (!map[fa.shapeId]) map[fa.shapeId] = [];
+        map[fa.shapeId].push(fa);
+      }
+    }
+    return map;
+  }, [fireAnimations]);
+
   const gesture = useCanvasGestures({
     centerX, centerY, maxRadius: zMaxR, minRadius: zMinR,
     width: layout.width, height: layout.height,
   });
 
-  // Clock hand length
+  // Clock hand length — extend past outermost ring
   const handLength = radii.length > 0
-    ? radii[radii.length - 1] + 30
-    : zMaxR + 30;
+    ? radii[radii.length - 1] + 40
+    : zMaxR + 40;
 
   // Ghost ring
   const showGhost = shapes.length < MAX_SHAPES && !addPanelOpen;
   const ghostR = showGhost ? getGhostRadius(shapes.length, radii, zMaxR) : 0;
+
+  // Memoize gradient center vec to avoid re-creating every render
+  const gradientCenter = useMemo(() => vec(centerX, centerY), [centerX, centerY]);
+  const gradientRadius = useMemo(
+    () => Math.max(layout.width, layout.height) * 0.7,
+    [layout.width, layout.height]
+  );
+
+  // Memoize play button path string
+  const playPath = useMemo(
+    () => `M ${centerX - 18} ${centerY - 28} L ${centerX + 30} ${centerY} L ${centerX - 18} ${centerY + 28} Z`,
+    [centerX, centerY]
+  );
 
   return (
     <View style={{ flex: 1 }} onLayout={onLayout}>
@@ -75,9 +95,9 @@ export default function CanvasView({
           {/* Background gradient */}
           <Rect x={0} y={0} width={layout.width} height={layout.height}>
             <RadialGradient
-              c={vec(centerX, centerY)}
-              r={Math.max(layout.width, layout.height) * 0.7}
-              colors={[COLORS.bgGradientCenter, COLORS.bg]}
+              c={gradientCenter}
+              r={gradientRadius}
+              colors={GRADIENT_COLORS}
             />
           </Rect>
 
@@ -101,7 +121,7 @@ export default function CanvasView({
                 opacity={opacity}
                 isPanelShape={isPanelShape}
                 selectedNodeIndex={selectedNodeIndex}
-                fireAnimations={fireAnimations}
+                fireAnimations={firesByShape[shape.id]}
               />
             );
           })}
@@ -116,7 +136,7 @@ export default function CanvasView({
             />
           )}
 
-          {/* Clock hand */}
+          {/* Clock hand — angle is a shared value, zero React re-renders */}
           {audioStarted && (
             <ClockHand
               angle={clockAngle}
@@ -137,7 +157,7 @@ export default function CanvasView({
               <Circle cx={centerX} cy={centerY} r={72} color={COLORS.shapes[0].main} />
               <Circle cx={centerX} cy={centerY} r={68} color="rgba(255,255,255,0.15)" />
               <SkiaPath
-                path={`M ${centerX - 18} ${centerY - 28} L ${centerX + 30} ${centerY} L ${centerX - 18} ${centerY + 28} Z`}
+                path={playPath}
                 color="white"
               />
             </Group>
@@ -147,3 +167,6 @@ export default function CanvasView({
     </View>
   );
 }
+
+// Static gradient colors array — never changes, so define outside component
+const GRADIENT_COLORS = [COLORS.bgGradientCenter, COLORS.bg];

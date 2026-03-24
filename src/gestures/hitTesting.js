@@ -29,7 +29,7 @@ function getGhostRadius(shapeCount, radii, maxR) {
   const gap = shapeCount > 1
     ? (radii[radii.length - 1] - radii[radii.length - 2])
     : outermost * 0.4;
-  return Math.min(outermost + gap * 0.7, maxR * 1.15);
+  return Math.min(outermost + gap * 1.2, maxR * 1.35);
 }
 
 function getNextSideCount(shapes) {

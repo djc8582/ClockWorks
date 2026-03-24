@@ -100,10 +100,10 @@ export function addNewShape(sides) {
 
   const newColor = getNextColorIndex(shapes);
 
-  const lastTimbre = shapes.length > 0 ? shapes[shapes.length - 1].timbre : 'bell';
+  const lastTimbre = shapes.length > 0 ? shapes[shapes.length - 1].timbre : 'epiano';
   const melodicTimbres = TIMBRES.map(t => t.id).filter(t => !DRUM_TIMBRES.has(t));
   const availableTimbres = melodicTimbres.filter(t => t !== lastTimbre);
-  const newTimbre = availableTimbres[0] || 'bell';
+  const newTimbre = availableTimbres[0] || 'epiano';
 
   const newId = generateShapeId();
   const vertices = [];
@@ -113,7 +113,7 @@ export function addNewShape(sides) {
 
   updateState(s => {
     s.scenes[s.activeSceneIndex].shapes.push({
-      id: newId, sides, colorIndex: newColor, timbre: newTimbre, subdivision: 1, vertices,
+      id: newId, sides, colorIndex: newColor, timbre: newTimbre, volume: 1.0, subdivision: 1, vertices,
     });
     s.ui.panelShapeId = newId;
     s.ui.panelSceneIndex = s.activeSceneIndex;

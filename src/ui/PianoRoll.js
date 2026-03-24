@@ -13,15 +13,16 @@ function getStepData(vertex, stepIndex) {
 }
 
 function buildRows(scale, shape) {
+  const scaleSet = new Set(scale);
   const rowSet = new Set();
   for (let p = PITCH.max; p >= PITCH.min; p--) {
-    if (scale.includes(p % 12)) rowSet.add(p);
+    if (scaleSet.has(p % 12)) rowSet.add(p);
   }
   for (const v of shape.vertices) {
-    for (const p of (v.pitches || [])) rowSet.add(p);
+    if (v.pitches) for (const p of v.pitches) rowSet.add(p);
     if (v.subs) {
       for (const sub of v.subs) {
-        for (const p of (sub.pitches || [])) rowSet.add(p);
+        if (sub.pitches) for (const p of sub.pitches) rowSet.add(p);
       }
     }
   }
@@ -74,7 +75,7 @@ export default function PianoRoll({ shape, color }) {
     updateState(s => {
       const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shape.id);
       if (!sh || !sh.vertices[vi]) return;
-      const sd = si === 0 ? sh.vertices[vi] : sh.vertices[vi].subs[si - 1];
+      const sd = si === 0 ? sh.vertices[vi] : (sh.vertices[vi].subs && sh.vertices[vi].subs[si - 1]);
       if (sd) sd.muted = !sd.muted;
     });
   }

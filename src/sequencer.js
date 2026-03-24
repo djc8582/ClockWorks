@@ -1,5 +1,5 @@
 import { getState, getShapes, loadScene } from './state.js';
-import { rescheduleAll, triggerNote, isAudioInitialized } from './audio/audioEngine.js';
+import { transitionScene, isAudioInitialized } from './audio/audioEngine.js';
 import { TIMING } from './constants.js';
 
 let cycleCount = 0;
@@ -42,16 +42,14 @@ function morphToScene(targetIndex) {
   if (targetIndex < 0 || targetIndex >= state.scenes.length) return;
   if (!isAudioInitialized()) return;
 
+  // Fade out old voices smoothly, then load new scene
+  // The scheduler keeps running with continuous timing — no restart.
+  // New scene's shapes will be picked up on the next scheduler tick.
   loadScene(targetIndex);
-  rescheduleAll();
+  transitionScene();
 
-  // Manually trigger beat 0 for each shape so the transition is seamless
-  const shapes = getShapes();
-  for (const shape of shapes) {
-    if (shape.vertices && shape.vertices.length > 0) {
-      triggerNote(shape, 0);
-    }
-  }
+  // Don't manually trigger beat 0 — the scheduler handles it naturally
+  // since the clock hand continues smoothly through the transition.
 }
 
 function resetCycleCount() {

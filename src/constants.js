@@ -93,15 +93,26 @@ export const MAX_SUBDIVISION = 4;
 
 // ── Timbres ───────────────────────────────────────────────────
 export const TIMBRES = [
-  { id: "bell",    label: "Bell",    icon: "1" },
-  { id: "keys",    label: "Keys",    icon: "2" },
-  { id: "pluck",   label: "Pluck",   icon: "3" },
-  { id: "marimba", label: "Marimba", icon: "4" },
-  { id: "bass",    label: "Bass",    icon: "5" },
-  { id: "subbass", label: "Sub",     icon: "6" },
+  // Melodic
+  { id: "epiano",  label: "E.Piano",  category: "Keys" },
+  { id: "piano",   label: "Piano",    category: "Keys" },
+  { id: "keys",    label: "Bright Keys", category: "Keys" },
+  { id: "organ",   label: "Organ",    category: "Keys" },
+  { id: "marimba", label: "Marimba",  category: "Mallet" },
+  { id: "vibes",   label: "Vibes",    category: "Mallet" },
+  { id: "pluck",   label: "Pluck",    category: "String" },
+  { id: "guitar",  label: "Guitar",   category: "String" },
+  { id: "strings", label: "Strings",  category: "String" },
+  { id: "bass",    label: "Bass",     category: "Bass" },
+  { id: "subbass", label: "Sub Bass", category: "Bass" },
+  // Drums
+  { id: "kick",    label: "Kick",     category: "Drums" },
+  { id: "snare",   label: "Snare",    category: "Drums" },
+  { id: "hihat",   label: "Hi-Hat",   category: "Drums" },
+  { id: "clap",    label: "Clap",     category: "Drums" },
 ];
 
-export const DRUM_TIMBRES = new Set([]);
+export const DRUM_TIMBRES = new Set(["kick", "snare", "hihat", "clap"]);
 
 export const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
 

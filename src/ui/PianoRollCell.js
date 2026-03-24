@@ -1,4 +1,4 @@
-import React, { useRef, useCallback } from 'react';
+import React, { useRef, useCallback, useMemo } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { COLORS, PITCH } from '../constants.js';
@@ -10,7 +10,7 @@ function getStepData(vertex, stepIndex) {
   return vertex.subs && vertex.subs[stepIndex - 1];
 }
 
-export default function PianoRollCell({
+export default React.memo(function PianoRollCell({
   shapeId,
   vertexIndex,
   stepIndex,
@@ -37,15 +37,16 @@ export default function PianoRollCell({
 
     const stepData = getStepData(shape.vertices[vertexIndex], stepIndex);
     if (!stepData) return;
-    const hasPitch = stepData.pitches.includes(pitch);
+    const pitches = stepData.pitches || [];
+    const hasPitch = pitches.includes(pitch);
 
     if (hasPitch && !stepData.muted) {
       // Remove from chord or mute
       updateState(s => {
         const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shapeId);
-        if (!sh) return;
-        const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : sh.vertices[vertexIndex].subs[stepIndex - 1];
-        if (!sd) return;
+        if (!sh || !sh.vertices[vertexIndex]) return;
+        const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : (sh.vertices[vertexIndex].subs && sh.vertices[vertexIndex].subs[stepIndex - 1]);
+        if (!sd || !sd.pitches) return;
         if (sd.pitches.length > 1) {
           sd.pitches = sd.pitches.filter(p => p !== pitch);
         } else {
@@ -57,9 +58,10 @@ export default function PianoRollCell({
       // Add pitch to chord
       updateState(s => {
         const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shapeId);
-        if (!sh) return;
-        const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : sh.vertices[vertexIndex].subs[stepIndex - 1];
+        if (!sh || !sh.vertices[vertexIndex]) return;
+        const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : (sh.vertices[vertexIndex].subs && sh.vertices[vertexIndex].subs[stepIndex - 1]);
         if (!sd) return;
+        if (!sd.pitches) sd.pitches = [];
         if (hasPitch) {
           if (sd.pitches.length > 1) {
             sd.pitches = sd.pitches.filter(p => p !== pitch);
@@ -78,50 +80,59 @@ export default function PianoRollCell({
     }
   }, [shapeId, vertexIndex, stepIndex, pitch]);
 
-  const tap = Gesture.Tap().runOnJS(true).onEnd(onTap);
+  const tap = useMemo(() =>
+    Gesture.Tap().runOnJS(true).onEnd(onTap),
+    [onTap]
+  );
 
-  const pan = Gesture.Pan()
-    .runOnJS(true)
-    .onStart((e) => {
-      startY.current = e.y;
-      lastY.current = e.y;
-      mode.current = null;
-    })
-    .onUpdate((e) => {
-      const totalDy = startY.current - e.y;
-
-      if (mode.current === null) {
-        if (Math.abs(totalDy) > 3 && isActive) {
-          mode.current = 'velocity';
-        } else {
-          return;
-        }
-      }
-
-      if (mode.current === 'velocity') {
-        const frameDy = lastY.current - e.y;
+  const pan = useMemo(() =>
+    Gesture.Pan()
+      .runOnJS(true)
+      .onStart((e) => {
+        startY.current = e.y;
         lastY.current = e.y;
+        mode.current = null;
+      })
+      .onUpdate((e) => {
+        const totalDy = startY.current - e.y;
 
-        updateState(s => {
-          const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shapeId);
-          if (!sh || !sh.vertices[vertexIndex]) return;
-          const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : sh.vertices[vertexIndex].subs[stepIndex - 1];
-          if (sd) {
-            sd.velocity = Math.round(Math.max(1, Math.min(127, sd.velocity + frameDy * 0.5)));
+        if (mode.current === null) {
+          if (Math.abs(totalDy) > 3) {
+            mode.current = 'velocity';
+          } else {
+            return;
           }
-        });
-      }
-    })
-    .onEnd(() => {
-      if (mode.current === 'velocity') {
-        const state = getState();
-        const shape = state.scenes[state.activeSceneIndex].shapes.find(s => s.id === shapeId);
-        if (shape) playPreview(shape, vertexIndex, stepIndex);
-      }
-      mode.current = null;
-    });
+        }
 
-  const gesture = isActive ? Gesture.Race(pan, tap) : tap;
+        if (mode.current === 'velocity') {
+          const frameDy = lastY.current - e.y;
+          lastY.current = e.y;
+
+          updateState(s => {
+            const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shapeId);
+            if (!sh || !sh.vertices[vertexIndex]) return;
+            const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : (sh.vertices[vertexIndex].subs && sh.vertices[vertexIndex].subs[stepIndex - 1]);
+            if (sd) {
+              sd.velocity = Math.round(Math.max(1, Math.min(127, (sd.velocity || 85) + frameDy * 0.5)));
+            }
+          });
+        }
+      })
+      .onEnd(() => {
+        if (mode.current === 'velocity') {
+          const state = getState();
+          const shape = state.scenes[state.activeSceneIndex].shapes.find(s => s.id === shapeId);
+          if (shape) playPreview(shape, vertexIndex, stepIndex);
+        }
+        mode.current = null;
+      }),
+    [shapeId, vertexIndex, stepIndex]
+  );
+
+  const gesture = useMemo(() =>
+    isActive ? Gesture.Race(pan, tap) : tap,
+    [isActive, pan, tap]
+  );
 
   const velPercent = Math.round((velocity / 127) * 100);
 
@@ -150,7 +161,7 @@ export default function PianoRollCell({
       </View>
     </GestureDetector>
   );
-}
+});
 
 const styles = StyleSheet.create({
   cell: {

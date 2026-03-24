@@ -1,9 +1,9 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Group, Path, Circle, Line, Skia, vec } from '@shopify/react-native-skia';
 import { COLORS, DIMENSIONS, PITCH } from '../constants.js';
 import { getVertexPositions, getStemEndpoint } from '../shapes.js';
 
-// Builds a Skia path for a closed polygon
+// Builds a Skia path for a closed polygon — only called when vertices change
 function makePolygonPath(vertices) {
   const path = Skia.Path.Make();
   if (vertices.length === 0) return path;
@@ -27,11 +27,20 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
   fireAnimations,
 }) {
   const color = COLORS.shapes[shape.colorIndex % COLORS.shapes.length];
-  const vertices = getVertexPositions(shape.sides, centerX, centerY, radius * scale);
+
+  // Memoize vertex positions — only recalculate when geometry actually changes
+  const vertices = useMemo(
+    () => getVertexPositions(shape.sides, centerX, centerY, radius * scale),
+    [shape.sides, centerX, centerY, radius, scale]
+  );
+
+  // Memoize the Skia polygon path — only recreate when vertex positions change
+  const polygonPath = useMemo(
+    () => makePolygonPath(vertices),
+    [vertices]
+  );
 
   if (vertices.length === 0) return null;
-
-  const polygonPath = makePolygonPath(vertices);
 
   // Ring stroke paint
   const ringColor = isPanelShape
@@ -39,15 +48,16 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
     : color.main + '15';
   const ringWidth = isPanelShape ? 2 : 1;
 
-  // Prepare fire scale per vertex
-  const fireScales = {};
-  if (fireAnimations) {
-    for (const fa of fireAnimations) {
-      if (fa.shapeId === shape.id) {
-        fireScales[fa.vertexIndex] = fa.scale || 1;
+  // Prepare fire scale per vertex (already filtered by shapeId)
+  const fireScales = useMemo(() => {
+    const map = {};
+    if (fireAnimations) {
+      for (const fa of fireAnimations) {
+        map[fa.vertexIndex] = fa.scale || 1;
       }
     }
-  }
+    return map;
+  }, [fireAnimations]);
 
   return (
     <Group opacity={opacity}>

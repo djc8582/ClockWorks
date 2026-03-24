@@ -15,7 +15,8 @@ function createDefaultState() {
             id: "shape-1",
             sides: 3,
             colorIndex: 0,
-            timbre: "bell",
+            timbre: "epiano",
+            volume: 1.0,
             subdivision: 1,
             vertices: [
               { pitches: [60], velocity: 100, muted: false, subs: [] },
@@ -39,6 +40,7 @@ function createDefaultState() {
       canvasZoom: 1.0,
       rollZoom: 1.0,
       clockAngle: -Math.PI / 2,
+      mixerOpen: false,
       audioStarted: false,
       ghostRingHover: false,
       addPanelOpen: false,
@@ -83,13 +85,16 @@ function notifyListeners() {
   }
 }
 
+const EMPTY_SCENE = { shapes: [] };
+
 function getActiveScene() {
+  if (!state || !state.scenes || state.scenes.length === 0) return EMPTY_SCENE;
   const idx = Math.max(0, Math.min(state.activeSceneIndex, state.scenes.length - 1));
-  return state.scenes[idx];
+  return state.scenes[idx] || EMPTY_SCENE;
 }
 
 function getShapes() {
-  return getActiveScene().shapes;
+  return getActiveScene().shapes || [];
 }
 
 function getShapeById(id) {
