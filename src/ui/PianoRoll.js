@@ -1,9 +1,7 @@
-import React, { useMemo, useRef, useState, useCallback } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { View, ScrollView, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import { runOnJS } from 'react-native-reanimated';
-import { COLORS, NOTE_NAMES, PITCH, DIMENSIONS } from '../constants.js';
-import { getState, updateState } from '../state.js';
+import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS } from '../constants.js';
+import { updateState } from '../state.js';
 import { useStore } from '../hooks/useStore.js';
 import PianoRollCell from './PianoRollCell.js';
 
@@ -32,6 +30,116 @@ function buildRows(scale, shape) {
 export default function PianoRoll({ shape, color }) {
   if (!shape) return null;
 
+  const isDrum = DRUM_TIMBRES.has(shape.timbre);
+
+  if (isDrum) return <DrumGrid shape={shape} color={color} />;
+  return <MelodicGrid shape={shape} color={color} />;
+}
+
+// ── Drum step sequencer ──────────────────────────────────────
+function DrumGrid({ shape, color }) {
+  const { width: screenWidth } = useWindowDimensions();
+  const selectedNode = useStore(s => s.ui.selectedNodeIndex);
+  const sub = shape.subdivision || 1;
+  const totalCols = shape.sides * sub;
+
+  const cellW = Math.max(44, Math.floor((screenWidth - 70) / totalCols));
+  const cellH = 48;
+  const headerH = 36;
+
+  const slotLabels = DRUM_SLOTS || ['Kick', 'Snare', 'HiHat', 'Perc'];
+
+  function toggleStep(vi, si) {
+    updateState(s => {
+      const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shape.id);
+      if (!sh || !sh.vertices[vi]) return;
+      const sd = si === 0 ? sh.vertices[vi] : (sh.vertices[vi].subs && sh.vertices[vi].subs[si - 1]);
+      if (sd) sd.muted = !sd.muted;
+    });
+  }
+
+  return (
+    <ScrollView style={styles.outerScroll} nestedScrollEnabled>
+      <ScrollView horizontal style={styles.innerScroll} nestedScrollEnabled>
+        <View>
+          {/* Column headers */}
+          <View style={[styles.headerRow, { height: headerH }]}>
+            <View style={[styles.cornerCell, { width: 70 }]}>
+              <Text style={styles.cornerText}>Step</Text>
+            </View>
+            {Array.from({ length: shape.sides }).map((_, vi) =>
+              Array.from({ length: sub }).map((_, s) => {
+                const sel = vi === selectedNode;
+                return (
+                  <View
+                    key={`dh-${vi}-${s}`}
+                    style={[
+                      styles.colHeader,
+                      { width: cellW, height: headerH },
+                      sel && styles.colHeaderSelected,
+                      s === 0 && vi > 0 && styles.groupStart,
+                    ]}
+                  >
+                    <Text style={[styles.colNum, sel && { color: color.main, fontWeight: '700' }]}>
+                      {s === 0 ? vi + 1 : ''}
+                    </Text>
+                  </View>
+                );
+              })
+            )}
+          </View>
+
+          {/* Drum slot rows */}
+          {slotLabels.map((slot, slotIdx) => {
+            const label = slot.charAt(0).toUpperCase() + slot.slice(1);
+            return (
+              <View key={`drum-${slotIdx}`} style={styles.row}>
+                <View style={[styles.label, { width: 70, height: cellH }]}>
+                  <Text style={styles.drumLabel}>{label}</Text>
+                </View>
+                {Array.from({ length: shape.sides }).map((_, vi) =>
+                  Array.from({ length: sub }).map((_, s) => {
+                    // A drum step is "active" if vertex vi maps to this slot AND is not muted
+                    const vertexSlot = vi % slotLabels.length;
+                    const isThisSlot = vertexSlot === slotIdx;
+                    const stepData = getStepData(shape.vertices[vi], s);
+                    const isMuted = stepData ? stepData.muted : false;
+                    const isActive = isThisSlot && !isMuted;
+
+                    return (
+                      <Pressable
+                        key={`dc-${vi}-${s}-${slotIdx}`}
+                        style={[
+                          styles.drumCell,
+                          { width: cellW, height: cellH },
+                          s === 0 && vi > 0 && styles.groupStart,
+                          vi === selectedNode && styles.drumCellSelected,
+                        ]}
+                        onPress={() => isThisSlot ? toggleStep(vi, s) : null}
+                      >
+                        {isThisSlot && (
+                          <View style={[
+                            styles.drumDot,
+                            isActive
+                              ? { backgroundColor: color.main }
+                              : { backgroundColor: 'rgba(0,0,0,0.08)' },
+                          ]} />
+                        )}
+                      </Pressable>
+                    );
+                  })
+                )}
+              </View>
+            );
+          })}
+        </View>
+      </ScrollView>
+    </ScrollView>
+  );
+}
+
+// ── Melodic piano roll ───────────────────────────────────────
+function MelodicGrid({ shape, color }) {
   const { width: screenWidth } = useWindowDimensions();
   const scale = useStore(s => s.scale);
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
@@ -41,7 +149,6 @@ export default function PianoRoll({ shape, color }) {
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
 
-  // Flexible cell width: fill available width, then zoom scales it
   const labelW = 42;
   const availableWidth = screenWidth - labelW;
   const baseCellW = Math.max(40, Math.floor(availableWidth / totalCols));
@@ -50,26 +157,6 @@ export default function PianoRoll({ shape, color }) {
   const headerH = Math.round(44 * rollZoom);
 
   const rows = useMemo(() => buildRows(scale, shape), [scale, shape]);
-
-  // Pinch-to-zoom on the roll
-  const applyZoom = useCallback((newZoom) => {
-    updateState(s => {
-      s.ui.rollZoom = Math.max(DIMENSIONS.rollZoomMin, Math.min(DIMENSIONS.rollZoomMax, newZoom));
-    });
-  }, []);
-
-  const pinch = useMemo(() => {
-    let startZoom = 1;
-    return Gesture.Pinch()
-      .onStart(() => {
-        'worklet';
-        startZoom = rollZoom;
-      })
-      .onUpdate((e) => {
-        'worklet';
-        runOnJS(applyZoom)(startZoom * e.scale);
-      });
-  }, [rollZoom, applyZoom]);
 
   function toggleMute(vi, si) {
     updateState(s => {
@@ -81,14 +168,12 @@ export default function PianoRoll({ shape, color }) {
   }
 
   return (
-    <GestureDetector gesture={pinch}>
-      <ScrollView style={styles.outerScroll} nestedScrollEnabled>
-        <ScrollView
-          ref={scrollRef}
-          horizontal
-          style={styles.innerScroll}
-          nestedScrollEnabled
-        >
+    <ScrollView style={styles.outerScroll}>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        style={styles.innerScroll}
+      >
           <View>
             {/* Column headers */}
             <View style={[styles.headerRow, { height: headerH }]}>
@@ -184,17 +269,12 @@ export default function PianoRoll({ shape, color }) {
           </View>
         </ScrollView>
       </ScrollView>
-    </GestureDetector>
   );
 }
 
 const styles = StyleSheet.create({
-  outerScroll: {
-    flex: 1,
-  },
-  innerScroll: {
-    flex: 1,
-  },
+  outerScroll: { flex: 1 },
+  innerScroll: { flex: 1 },
   headerRow: {
     flexDirection: 'row',
     borderBottomWidth: 1,
@@ -205,11 +285,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: COLORS.panelBg,
   },
-  cornerText: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: COLORS.textDim,
-  },
+  cornerText: { fontSize: 11, fontWeight: '500', color: COLORS.textDim },
   colHeader: {
     justifyContent: 'center',
     alignItems: 'center',
@@ -217,46 +293,28 @@ const styles = StyleSheet.create({
     borderRightWidth: StyleSheet.hairlineWidth,
     borderRightColor: 'rgba(0,0,0,0.06)',
   },
-  colHeaderSelected: {
-    backgroundColor: 'rgba(0,0,0,0.04)',
-  },
-  colNum: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.text,
-  },
+  colHeaderSelected: { backgroundColor: 'rgba(0,0,0,0.04)' },
+  colNum: { fontSize: 11, fontWeight: '600', color: COLORS.text },
   muteBtn: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    borderWidth: 1.5,
-    borderColor: 'rgba(0,0,0,0.15)',
-    backgroundColor: 'transparent',
+    width: 10, height: 10, borderRadius: 5,
+    borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.15)', backgroundColor: 'transparent',
   },
-  groupStart: {
-    borderLeftWidth: 1.5,
-    borderLeftColor: 'rgba(0,0,0,0.12)',
-  },
-  row: {
-    flexDirection: 'row',
-  },
+  groupStart: { borderLeftWidth: 1.5, borderLeftColor: 'rgba(0,0,0,0.12)' },
+  row: { flexDirection: 'row' },
   label: {
-    justifyContent: 'center',
-    paddingLeft: 4,
-    backgroundColor: COLORS.panelBg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
+    justifyContent: 'center', paddingLeft: 4, backgroundColor: COLORS.panelBg,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(0,0,0,0.06)',
   },
-  labelC: {
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.12)',
+  labelC: { borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.12)' },
+  labelText: { fontSize: 9, color: COLORS.textDim },
+  labelTextC: { fontWeight: '700', color: COLORS.text },
+  // Drum grid styles
+  drumLabel: { fontSize: 12, fontWeight: '600', color: COLORS.text },
+  drumCell: {
+    justifyContent: 'center', alignItems: 'center',
+    borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: 'rgba(0,0,0,0.06)',
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(0,0,0,0.06)',
   },
-  labelText: {
-    fontSize: 9,
-    color: COLORS.textDim,
-  },
-  labelTextC: {
-    fontWeight: '700',
-    color: COLORS.text,
-  },
+  drumCellSelected: { backgroundColor: 'rgba(0,0,0,0.03)' },
+  drumDot: { width: 24, height: 24, borderRadius: 12 },
 });
