@@ -1,7 +1,7 @@
 import { AudioContext } from 'react-native-audio-api';
 import { getState, getShapes, updateState } from '../state.js';
 import { TIMING } from '../constants.js';
-import { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices } from './timbres.js';
+import { createTimbre, triggerTimbre, initSampleBank } from './timbres.js';
 import { createScheduler } from './scheduler.js';
 
 let audioContext = null;

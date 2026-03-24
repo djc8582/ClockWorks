@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { View, StyleSheet, StatusBar, Pressable, Text, useWindowDimensions } from 'react-native';
-import { GestureHandlerRootView, Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { initState, getState, getShapes, updateState } from './src/state.js';
@@ -41,27 +41,11 @@ function AppContent() {
   const [fireAnimations, setFireAnimations] = useState([]);
   const [spokeAnimations, setSpokeAnimations] = useState([]);
   const [canvasLayout, setCanvasLayout] = useState({ width: 300, height: 300 });
-  const [panelHeight, setPanelHeight] = useState(Math.round(screenHeight * DEFAULT_PANEL_FRACTION));
-  const panelDragStart = useRef(0);
+  const panelHeight = Math.round(screenHeight * DEFAULT_PANEL_FRACTION);
 
   // Track pending timeouts for cleanup on unmount
   const pendingTimers = useRef(new Set());
   const animIdCounter = useRef(0);
-
-  // Drag handle for resizing bottom panel
-  const panelDrag = useMemo(() =>
-    Gesture.Pan()
-      .runOnJS(true)
-      .onStart(() => {
-        panelDragStart.current = panelHeight;
-      })
-      .onUpdate((e) => {
-        const maxH = Math.round(screenHeight * MAX_PANEL_FRACTION);
-        const newH = Math.round(panelDragStart.current - e.translationY);
-        setPanelHeight(Math.max(MIN_PANEL_HEIGHT, Math.min(maxH, newH)));
-      }),
-    [panelHeight, screenHeight]
-  );
 
   // Canvas layout info for fire animation positioning
   const onCanvasLayout = useCallback((layout) => {
@@ -90,7 +74,7 @@ function AppContent() {
       const shapes = getShapes();
       const radii = calculateRingRadii(shapes.length, maxR * zoom, minR * zoom);
       const si = shapes.findIndex(s => s.id === shape.id);
-      if (si === -1) return;
+      if (si === -1 || si >= radii.length) return;
       const positions = getVertexPositions(shape.sides, centerX, centerY, radii[si]);
       const pos = positions[vertexIndex];
       if (!pos) return;
@@ -197,14 +181,12 @@ function AppContent() {
         {/* Scene strip */}
         <SceneStrip />
 
-        {/* Bottom panel: piano roll — resizable via drag handle */}
+        {/* Bottom panel: piano roll */}
         <View style={[styles.bottomPanel, { height: panelHeight, paddingBottom: insets.bottom }]}>
           {/* Drag handle */}
-          <GestureDetector gesture={panelDrag}>
-            <View style={styles.dragHandle}>
-              <View style={styles.dragBar} />
-            </View>
-          </GestureDetector>
+          <View style={styles.dragHandle}>
+            <View style={styles.dragBar} />
+          </View>
           <PanelHeader shape={panelShape} color={panelColor} />
           <TimbreRow shape={panelShape} color={panelColor} />
           <PianoRoll shape={panelShape} color={panelColor} />

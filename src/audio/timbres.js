@@ -1,22 +1,10 @@
-// Hybrid timbre system: loads real .wav samples from assets when available,
-// falls back to synthesized AudioBuffers for timbres without samples.
+// Sample-based timbre system with pre-rendered AudioBuffers.
 // Each note = 1 AudioBufferSourceNode + 1 GainNode.
-//
-// To add a real sample for a timbre, place files in assets/samples/:
-//   {timbreId}_c3.wav, {timbreId}_c4.wav, {timbreId}_c5.wav
-// The loader will use them instead of synthesis for that timbre.
-
-// Asset imported lazily to avoid module init order issues
-let Asset = null;
-function getAsset() {
-  if (!Asset) Asset = require('expo-asset').Asset;
-  return Asset;
-}
+// Frequency-dependent rendering for consistent quality across octaves.
 
 const ATTACK_SEC = 0.004;
 const MAX_VOICES = 48;
 const REF_PITCHES = [48, 60, 72]; // C3, C4, C5
-const REF_NAMES = ['c3', 'c4', 'c5'];
 
 let sampleBank = null;
 const activeVoices = [];
@@ -57,76 +45,22 @@ const ALL_TIMBRES = [
   'kick', 'snare', 'hihat', 'clap',
 ];
 
-// Registry of available .wav sample assets — maps timbreId to require() calls.
-// When you add a .wav file to assets/samples/, register it here.
-// Each entry maps ref pitch name to a require() for the asset.
-// Example:
-//   piano: { c3: require('../../assets/samples/piano_c3.wav'), c4: ..., c5: ... },
-const SAMPLE_ASSETS = {
-  piano: {
-    c3: require('../../assets/samples/piano_c3.wav'),
-    c4: require('../../assets/samples/piano_c4.wav'),
-    c5: require('../../assets/samples/piano_c5.wav'),
-  },
-  guitar: {
-    c3: require('../../assets/samples/guitar_c3.wav'),
-    c4: require('../../assets/samples/guitar_c4.wav'),
-    c5: require('../../assets/samples/guitar_c5.wav'),
-  },
-};
-
-// Load a .wav asset into an AudioBuffer via file path (avoids fetch + arrayBuffer)
-async function loadWavAsset(ctx, assetModule) {
-  try {
-    const [asset] = await getAsset().loadAsync(assetModule);
-    const uri = asset.localUri || asset.uri;
-    // decodeAudioDataSource takes a file path and handles decoding natively
-    if (ctx.decodeAudioDataSource) {
-      return await ctx.decodeAudioDataSource(uri);
-    }
-    // Fallback to fetch + decodeAudioData
-    const response = await fetch(uri);
-    const arrayBuffer = await response.arrayBuffer();
-    return await ctx.decodeAudioData(arrayBuffer);
-  } catch (e) {
-    return null;
-  }
-}
-
-// Initialize with synthesis first (instant), then upgrade with real samples in background
 function initSampleBank(ctx) {
   const sr = ctx.sampleRate || 44100;
   sampleBank = {};
-  // Phase 1: synthesized buffers (instant, no async)
   for (const id of ALL_TIMBRES) {
     sampleBank[id] = {};
     for (const midi of REF_PITCHES) {
-      const freq = midiToFreq(midi);
-      const raw = renderTimbre(id, freq, sr);
-      normalize(raw, PEAK_TARGETS[id] || 0.75);
-      const buf = ctx.createBuffer(1, raw.length, sr);
-      const ch = buf.getChannelData(0);
-      for (let i = 0; i < raw.length; i++) ch[i] = raw[i];
-      sampleBank[id][midi] = buf;
-    }
-  }
-  // Phase 2: load real .wav samples in background, replacing synthesized ones
-  loadRealSamples(ctx).catch(() => {});
-}
-
-async function loadRealSamples(ctx) {
-  // Small delay to let the app finish initializing before we load assets
-  await new Promise(r => setTimeout(r, 500));
-  for (const [timbreId, assets] of Object.entries(SAMPLE_ASSETS)) {
-    if (!sampleBank[timbreId]) sampleBank[timbreId] = {};
-    for (let i = 0; i < REF_PITCHES.length; i++) {
-      const refName = REF_NAMES[i];
-      const midi = REF_PITCHES[i];
-      if (assets[refName]) {
-        const buf = await loadWavAsset(ctx, assets[refName]);
-        if (buf) {
-          sampleBank[timbreId][midi] = buf;
-        }
+      try {
+        const freq = midiToFreq(midi);
+        const raw = renderTimbre(id, freq, sr);
+        normalize(raw, PEAK_TARGETS[id] || 0.75);
+        const buf = ctx.createBuffer(1, raw.length, sr);
+        const ch = buf.getChannelData(0);
+        for (let i = 0; i < raw.length; i++) ch[i] = raw[i];
+        sampleBank[id][midi] = buf;
+      } catch (e) {
+        // Skip this sample — better than crashing the whole app
       }
     }
   }
@@ -690,4 +624,4 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, sta
   }
 }
 
-export { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices };
+export { createTimbre, triggerTimbre, initSampleBank };

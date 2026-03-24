@@ -107,6 +107,7 @@ export function useCanvasGestures({ centerX, centerY, maxRadius, minRadius, widt
 
 // Adds a new shape — called from AddPanel confirm
 export function addNewShape(sides) {
+  if (sides < 2 || sides > 24) return;
   const shapes = getShapes();
   if (shapes.length >= MAX_SHAPES) return;
 

@@ -17,7 +17,7 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
   const LOOKAHEAD_SEC = 0.15;    // schedule 150ms ahead — fewer ticks = fewer JSI bursts
 
   function tick() {
-    if (!running) return;
+    if (!running || !audioContext) return;
     const now = audioContext.currentTime;
 
     // If we've fallen far behind (JS thread stall), don't try to schedule

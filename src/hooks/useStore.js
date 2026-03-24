@@ -11,7 +11,11 @@ export function useStore(selector) {
   const getSnapshot = useCallback(() => {
     const state = getState();
     if (!state) return undefined;
-    return selectorRef.current ? selectorRef.current(state) : state;
+    try {
+      return selectorRef.current ? selectorRef.current(state) : state;
+    } catch (e) {
+      return undefined;
+    }
   }, []);
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
