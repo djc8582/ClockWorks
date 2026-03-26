@@ -130,21 +130,31 @@ export default React.memo(function CanvasView({ onLayout: onLayoutProp }) {
             />
           )}
 
-          {/* Play/pause visual indicator (Skia-drawn) */}
+          {/* Play/pause visual indicator */}
           <Group>
             {!audioStarted && (
-              <Rect x={0} y={0} width={layout.width} height={layout.height} color="rgba(0,0,0,0.12)" />
+              <Rect x={0} y={0} width={layout.width} height={layout.height} color="rgba(0,0,0,0.08)" />
             )}
-            <Circle
-              cx={centerX}
-              cy={centerY}
-              r={playing ? 20 : 36}
-              color={playing ? 'rgba(0,0,0,0.04)' : COLORS.shapes[0].main}
-            />
-            <SkiaPath
-              path={playing ? pausePath : playPath}
-              color={playing ? 'rgba(0,0,0,0.15)' : 'white'}
-            />
+            {!audioStarted && (
+              <Circle
+                cx={centerX}
+                cy={centerY}
+                r={36}
+                color={COLORS.shapes[0].main}
+              />
+            )}
+            {!audioStarted && (
+              <SkiaPath
+                path={playPath}
+                color="white"
+              />
+            )}
+            {audioStarted && !playing && (
+              <SkiaPath
+                path={playPath}
+                color="rgba(0,0,0,0.15)"
+              />
+            )}
           </Group>
         </Canvas>
       </GestureDetector>
@@ -153,7 +163,7 @@ export default React.memo(function CanvasView({ onLayout: onLayoutProp }) {
       <Pressable
         style={[
           canvasStyles.playBtn,
-          { left: centerX - 30, top: centerY - 30 },
+          { left: centerX - 35, top: centerY - 35 },
         ]}
         onPress={handlePlayPause}
       />
@@ -166,8 +176,9 @@ const GRADIENT_COLORS = [COLORS.bgGradientCenter, COLORS.bg];
 const canvasStyles = StyleSheet.create({
   playBtn: {
     position: 'absolute',
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    zIndex: 10,
   },
 });

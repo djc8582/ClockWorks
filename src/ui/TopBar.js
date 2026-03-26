@@ -6,10 +6,30 @@ import { updateState } from '../state.js';
 import { updateCycleDuration, rescheduleAll } from '../audio/audioEngine.js';
 import { useStore } from '../hooks/useStore.js';
 
-export default React.memo(function TopBar() {
-  const bpm = useStore(s => s.bpm);
+// Top header — project name + mixer toggle
+export function TopBar() {
   const mixerOpen = useStore(s => s.ui.mixerOpen);
 
+  function toggleMixer() {
+    updateState(s => { s.ui.mixerOpen = !s.ui.mixerOpen; });
+  }
+
+  return (
+    <View style={styles.header}>
+      <Text style={styles.projectName}>Clockworks</Text>
+      <Pressable
+        style={[styles.mixerBtn, mixerOpen && styles.mixerBtnActive]}
+        onPress={toggleMixer}
+      >
+        <Text style={[styles.mixerBtnText, mixerOpen && styles.mixerBtnTextActive]}>Mixer</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+// BPM control strip — sits above the scene strip
+export function TempoBar() {
+  const bpm = useStore(s => s.bpm);
   const debounceRef = React.useRef(null);
 
   useEffect(() => {
@@ -19,65 +39,44 @@ export default React.memo(function TopBar() {
   const onBpmChange = useCallback((val) => {
     const newBpm = Math.round(val);
     updateState(s => { s.bpm = newBpm; });
-    updateCycleDuration(); // Update timing immediately to avoid desync
+    updateCycleDuration();
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => rescheduleAll(), 50);
   }, []);
 
-  function toggleMixer() {
-    updateState(s => { s.ui.mixerOpen = !s.ui.mixerOpen; });
-  }
-
   return (
-    <View style={styles.container}>
-      <View style={styles.bpmGroup}>
-        <Text style={styles.bpmLabel}>{bpm} BPM</Text>
-        <Slider
-          style={styles.bpmSlider}
-          minimumValue={30}
-          maximumValue={300}
-          step={1}
-          value={bpm}
-          onValueChange={onBpmChange}
-          minimumTrackTintColor={COLORS.shapes[0].main}
-          maximumTrackTintColor="rgba(0,0,0,0.1)"
-        />
-      </View>
-
-      <Pressable
-        style={[styles.mixerBtn, mixerOpen && styles.mixerBtnActive]}
-        onPress={toggleMixer}
-      >
-        <Text style={[styles.mixerBtnText, mixerOpen && styles.mixerBtnTextActive]}>Mixer</Text>
-      </Pressable>
+    <View style={styles.tempoBar}>
+      <Text style={styles.bpmLabel}>{bpm} BPM</Text>
+      <Slider
+        style={styles.bpmSlider}
+        minimumValue={10}
+        maximumValue={400}
+        step={1}
+        value={bpm}
+        onValueChange={onBpmChange}
+        minimumTrackTintColor={COLORS.shapes[0].main}
+        maximumTrackTintColor="rgba(0,0,0,0.1)"
+      />
     </View>
   );
-});
+}
+
+export default TopBar;
 
 const styles = StyleSheet.create({
-  container: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: 'rgba(255,255,255,0.9)',
-    gap: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: COLORS.panelBg,
   },
-  bpmGroup: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  bpmLabel: {
-    fontSize: 12,
-    fontWeight: '600',
+  projectName: {
+    fontSize: 17,
+    fontWeight: '700',
     color: COLORS.text,
-    width: 60,
-  },
-  bpmSlider: {
-    flex: 1,
-    height: 28,
+    letterSpacing: -0.3,
   },
   mixerBtn: {
     paddingHorizontal: 14,
@@ -95,5 +94,25 @@ const styles = StyleSheet.create({
   },
   mixerBtnTextActive: {
     color: '#fff',
+  },
+  tempoBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    backgroundColor: COLORS.panelBg,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.06)',
+    gap: 8,
+  },
+  bpmLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.text,
+    width: 55,
+  },
+  bpmSlider: {
+    flex: 1,
+    height: 28,
   },
 });

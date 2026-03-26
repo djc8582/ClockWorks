@@ -125,5 +125,7 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
     return startTime;
   }
 
-  return { start, stop, resume, setCycleDuration, resetScheduleWindow, getLoopPosition, getCycleNumber, getSeconds, getStartTime };
+  function isRunning() { return running; }
+
+  return { start, stop, resume, isRunning, setCycleDuration, resetScheduleWindow, getLoopPosition, getCycleNumber, getSeconds, getStartTime };
 }

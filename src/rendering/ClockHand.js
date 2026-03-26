@@ -45,10 +45,9 @@ function ClockHandInner({ angle, centerX, centerY, handLength }) {
   return (
     <Group>
       {trails.map((ep, i) => (
-        <Line key={i} p1={center} p2={ep} color={TRAIL_COLORS[i]} style="stroke" strokeWidth={1} />
+        <Line key={i} p1={center} p2={ep} color={TRAIL_COLORS[i]} style="stroke" strokeWidth={1.5} />
       ))}
-      <Line p1={center} p2={endPoint} color={COLORS.clockHandGlow} style="stroke" strokeWidth={DIMENSIONS.clockHandGlowWidth} strokeCap="round" />
-      <Line p1={center} p2={endPoint} color={COLORS.clockHand} style="stroke" strokeWidth={DIMENSIONS.clockHandWidth} strokeCap="round" />
+      <Line p1={center} p2={endPoint} color={COLORS.clockHand} style="stroke" strokeWidth={2} strokeCap="round" />
       <Circle cx={centerX} cy={centerY} r={4} color={COLORS.clockHand} />
     </Group>
   );

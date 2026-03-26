@@ -34,25 +34,31 @@ function getNoteDuration(shape) {
 }
 
 // ── Init ─────────────────────────────────────────────────────
-function initAudio() {
+// Called during loading screen — creates AudioContext and loads all samples.
+// Returns a promise that resolves when everything is ready to play.
+async function initAudio() {
   if (audioInitialized) return;
 
   try {
     audioContext = new AudioContext();
-    if (audioContext.resume) audioContext.resume();
+    try { audioContext.resume(); } catch (e) {}
 
     masterGain = audioContext.createGain();
     masterGain.gain.value = 0.7;
     masterGain.connect(audioContext.destination);
 
-    initSampleBank(audioContext);
+    // Wait for ALL samples to be decoded before marking as ready
+    await initSampleBank(audioContext);
 
     updateCycleDuration();
     scheduler = createScheduler(audioContext, cycleDuration, onSchedulerTick);
     audioInitialized = true;
-    scheduler.start();
 
-    // Suspend audio when app goes to background (iOS requirement)
+    // Suspend immediately — we'll resume when the user taps play.
+    // This prevents the context from auto-playing before the user interacts.
+    try { audioContext.suspend(); } catch (e) {}
+
+    // Background/foreground handling
     if (!appStateSubscription) {
       appStateSubscription = AppState.addEventListener('change', (nextState) => {
         if (!audioInitialized) return;
@@ -68,8 +74,7 @@ function initAudio() {
       });
     }
   } catch (e) {
-    console.warn('[audio] Init failed:', e?.message || e);
-    // Clean up partially created resources on failure
+    if (__DEV__) console.warn('[audio] Init failed:', e?.message || e);
     if (audioContext) {
       try { audioContext.close(); } catch (e2) {}
       audioContext = null;
@@ -77,6 +82,13 @@ function initAudio() {
     masterGain = null;
     audioInitialized = false;
   }
+}
+
+// Called when user taps play — resumes context and starts scheduler instantly.
+function startPlayback() {
+  if (!audioInitialized || !audioContext || !scheduler) return;
+  try { audioContext.resume(); } catch (e) {}
+  scheduler.start();
 }
 
 function updateCycleDuration() {
@@ -290,11 +302,13 @@ function getAudioContext() { return audioContext; }
 
 function getTransportSeconds() {
   if (!audioInitialized || !scheduler) return 0;
+  // Return 0 until the scheduler is actually running — prevents clock jump on init
+  if (!scheduler.isRunning()) return 0;
   return scheduler.getLoopPosition(audioContext.currentTime);
 }
 
 export {
-  initAudio, pauseAudio, resumeAudio, updateBPM, updateCycleDuration, rescheduleAll, transitionScene,
+  initAudio, startPlayback, pauseAudio, resumeAudio, updateBPM, updateCycleDuration, rescheduleAll, transitionScene,
   triggerNote, playPreview, swapTimbre, isAudioInitialized, getTransportSeconds,
   getCycleDuration, ensureSynth, setNoteCallback, getAudioContext,
 };

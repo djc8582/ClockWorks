@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useCallback, useEffect, useState } from 'react';
 import { View, ScrollView, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
-import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS } from '../constants.js';
+import { GestureDetector, Gesture } from 'react-native-gesture-handler';
+import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS, DIMENSIONS } from '../constants.js';
 import { updateState, safeActiveScene } from '../state.js';
 import { useStore } from '../hooks/useStore.js';
 import PianoRollCell from './PianoRollCell.js';
@@ -37,6 +38,30 @@ export default function PianoRoll({ shape, color }) {
 
   if (isDrum) return <DrumGrid shape={shape} color={color} />;
   return <MelodicGrid shape={shape} color={color} />;
+}
+
+// ── Pinch-to-zoom hook ───────────────────────────────────────
+function usePianoRollPinch() {
+  const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
+  const startZoomRef = useRef(1);
+
+  const pinch = useMemo(() =>
+    Gesture.Pinch()
+      .runOnJS(true)
+      .onStart(() => {
+        startZoomRef.current = rollZoom;
+      })
+      .onUpdate((e) => {
+        const newZoom = Math.max(
+          DIMENSIONS.rollZoomMin,
+          Math.min(DIMENSIONS.rollZoomMax, startZoomRef.current * e.scale)
+        );
+        updateState(s => { s.ui.rollZoom = Math.round(newZoom * 100) / 100; });
+      }),
+    [rollZoom]
+  );
+
+  return pinch;
 }
 
 // ── Scroll position preservation hook ────────────────────────
@@ -81,13 +106,15 @@ function useScrollPreserver(shapeId) {
 function DrumGrid({ shape, color }) {
   const { width: screenWidth } = useWindowDimensions();
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
+  const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
+  const pinch = usePianoRollPinch();
   const { outerRef, innerRef, onOuterScroll, onInnerScroll } = useScrollPreserver(shape.id);
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
 
-  const cellW = Math.max(44, Math.floor((screenWidth - 70) / totalCols));
-  const cellH = 48;
-  const headerH = 36;
+  const cellW = Math.max(44, Math.round(Math.floor((screenWidth - 70) / totalCols) * rollZoom));
+  const cellH = Math.round(48 * rollZoom);
+  const headerH = Math.round(36 * rollZoom);
 
   const slotLabels = DRUM_SLOTS || ['Kick', 'Snare', 'HiHat', 'Perc'];
 
@@ -116,6 +143,7 @@ function DrumGrid({ shape, color }) {
   }
 
   return (
+    <GestureDetector gesture={pinch}>
     <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
       <ScrollView ref={innerRef} horizontal style={styles.innerScroll} nestedScrollEnabled onScroll={onInnerScroll} scrollEventThrottle={16}>
         <View>
@@ -187,6 +215,7 @@ function DrumGrid({ shape, color }) {
         </View>
       </ScrollView>
     </ScrollView>
+    </GestureDetector>
   );
 }
 
@@ -200,6 +229,7 @@ function MelodicGrid({ shape, color }) {
   const scale = useStore(s => s.scale);
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
+  const pinch = usePianoRollPinch();
   const { outerRef, innerRef, onOuterScroll: baseOuterScroll, onInnerScroll, pos } = useScrollPreserver(shape.id);
 
   const sub = shape.subdivision || 1;
@@ -276,6 +306,7 @@ function MelodicGrid({ shape, color }) {
   }
 
   return (
+    <GestureDetector gesture={pinch}>
     <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
       <ScrollView
         ref={innerRef}
@@ -382,6 +413,7 @@ function MelodicGrid({ shape, color }) {
           </View>
         </ScrollView>
       </ScrollView>
+    </GestureDetector>
   );
 }
 

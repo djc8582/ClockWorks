@@ -16,7 +16,7 @@ function getShapeName(sides) {
 }
 
 function makeDefaultStep() {
-  return { pitches: [PITCH.defaultPitch], velocity: PITCH.defaultVelocity, muted: false };
+  return { pitches: [], velocity: PITCH.defaultVelocity, muted: true };
 }
 
 export default function PanelHeader({ shape, color }) {

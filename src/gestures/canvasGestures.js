@@ -3,18 +3,24 @@ import { Gesture } from 'react-native-gesture-handler';
 import { getState, getShapes, updateState, generateShapeId, safeActiveScene } from '../state.js';
 import { calculateRingRadii } from '../shapes.js';
 import { hitTest, hitTestGhostRing, getNextSideCount, getNextColorIndex } from './hitTesting.js';
-import { initAudio, pauseAudio, resumeAudio, rescheduleAll } from '../audio/audioEngine.js';
+import { initAudio, startPlayback, pauseAudio, resumeAudio, rescheduleAll } from '../audio/audioEngine.js';
 import { DIMENSIONS, MAX_SHAPES, PITCH, TIMBRES, DRUM_TIMBRES } from '../constants.js';
 import { distanceBetween } from '../shapes.js';
 
 const CENTER_TAP_RADIUS = 40;
 
-// Exported for the native Pressable play/pause button overlay
+// Exported for the native Pressable play/pause button overlay.
+// Audio is already fully initialized during the loading screen.
+// This just starts/stops the scheduler and resumes/suspends the context.
 export function handlePlayPause() {
   const state = getState();
   if (!state.ui.audioStarted) {
-    initAudio();
-    updateState(s => { s.ui.audioStarted = true; s.ui.playing = true; });
+    // First play — audio is preloaded, just start the scheduler
+    startPlayback();
+    updateState(s => {
+      s.ui.audioStarted = true;
+      s.ui.playing = true;
+    });
     return;
   }
   if (state.ui.playing) {
@@ -36,30 +42,21 @@ function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
     return;
   }
 
-  // First tap anywhere: init audio, then process the actual tap target
+  // First tap anywhere: start playback (audio already loaded during splash)
   let justStarted = false;
   if (!state.ui.audioStarted) {
-    initAudio();
-    updateState(s => { s.ui.audioStarted = true; s.ui.playing = true; });
+    startPlayback();
+    updateState(s => {
+      s.ui.audioStarted = true;
+      s.ui.playing = true;
+    });
     justStarted = true;
   }
 
-  // Tap center = play/pause toggle
+  // Center taps are handled by the native Pressable overlay (CanvasView.js)
+  // for instant response. Just ignore them here to avoid double-toggle.
   const distFromCenter = distanceBetween(x, y, centerX, centerY);
-  if (distFromCenter < CENTER_TAP_RADIUS) {
-    // If we just started audio, it's already playing — don't toggle
-    if (justStarted) return;
-    // Re-read state since updateState above may have changed it
-    const current = getState();
-    if (current.ui.playing) {
-      pauseAudio();
-      updateState(s => { s.ui.playing = false; });
-    } else {
-      resumeAudio();
-      updateState(s => { s.ui.playing = true; });
-    }
-    return;
-  }
+  if (distFromCenter < CENTER_TAP_RADIUS) return;
 
   const shapes = getShapes();
   const radii = calculateRingRadii(shapes.length, maxRadius, minRadius);

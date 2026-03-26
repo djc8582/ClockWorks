@@ -9,9 +9,10 @@ import { useStore } from './src/hooks/useStore.js';
 import { COLORS } from './src/constants.js';
 import { addNewShape } from './src/gestures/canvasGestures.js';
 import { preloadAssets } from './src/audio/timbres.js';
+import { initAudio } from './src/audio/audioEngine.js';
 
 import CanvasView from './src/rendering/CanvasView.js';
-import TopBar from './src/ui/TopBar.js';
+import { TopBar, TempoBar } from './src/ui/TopBar.js';
 import SceneStrip from './src/ui/SceneStrip.js';
 import PanelHeader from './src/ui/PanelHeader.js';
 import TimbreRow from './src/ui/TimbreRow.js';
@@ -39,9 +40,12 @@ function LoadingScreen({ onReady }) {
     // Fade in
     Animated.timing(fade, { toValue: 1, duration: 600, easing: Easing.out(Easing.ease), useNativeDriver: true }).start();
 
-    preloadAssets().then(() => {
-      setTimeout(onReady, 300);
-    });
+    // Preload asset files, then fully init AudioContext + decode all samples.
+    // The app won't appear until everything is ready — no glitchy first play.
+    preloadAssets()
+      .then(() => initAudio())
+      .then(() => setTimeout(onReady, 100))
+      .catch(() => setTimeout(onReady, 100));
   }, []);
 
   const rotation = sweep.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
@@ -209,7 +213,8 @@ function AppContent() {
         {/* Canvas area */}
         <CanvasView onLayout={onCanvasLayout} />
 
-        {/* Scene strip */}
+        {/* Tempo + Scene strip */}
+        <TempoBar />
         <SceneStrip />
 
         {/* Bottom panel: piano roll */}

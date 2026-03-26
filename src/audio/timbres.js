@@ -250,22 +250,20 @@ function preloadAssets() {
 // with event loop yields between each batch to prevent JS thread blocking.
 let synthsReady = false;
 
+// Returns a promise that resolves when all samples are loaded and ready to play.
 function initSampleBank(ctx) {
-  audioCtxRef = ctx; // Fix #6: store for soft-kill gain ramps
+  audioCtxRef = ctx;
   sampleBank = {};
 
-  // Pre-create empty banks for all timbres so findSample returns null (not crash) while loading
   for (const id of SYNTH_TIMBRES) sampleBank[id] = {};
   for (const id of Object.keys(SAMPLE_ASSETS)) sampleBank[id] = {};
   drumBank = {};
 
-  // Synth buffers rendered async in batches to avoid blocking the JS thread
-  renderSynthBuffersAsync(ctx).then(() => { synthsReady = true; }).catch(() => {});
-
-  // WAV samples decoded in parallel
-  decodeSamples(ctx).catch(e => {
-    console.warn('[timbres] Sample decoding failed:', e?.message || e);
-  });
+  // Run synth generation and WAV decoding in parallel, return when both done
+  return Promise.all([
+    renderSynthBuffersAsync(ctx).then(() => { synthsReady = true; }).catch(() => {}),
+    decodeSamples(ctx).catch(() => {}),
+  ]);
 }
 
 async function renderSynthBuffersAsync(ctx) {
@@ -349,40 +347,19 @@ async function decodeSamples(ctx) {
 }
 
 // ── Voice management (crash-safe) ────────────────────────────
-// Double-kill guard prevents crashes from react-native-audio-api's
-// clearOnEndedCallback race condition.
-let audioCtxRef = null; // stored on init for soft-kill ramps
+// No setTimeout for voice cleanup — react-native-audio-api 0.6.5 crashes
+// when disconnect() is called on a node that was already freed by the native
+// audio thread (SIGSEGV in AudioNodeManager::addPendingNodeConnection).
+// All disconnect calls are immediate and guarded by a killed flag.
+let audioCtxRef = null;
 
 function trackVoice(entry) {
   activeVoices.push(entry);
   while (activeVoices.length > MAX_VOICES) {
-    // Fix #6: soft-kill evicted voices with a 20ms gain ramp to prevent pops
-    softKillVoice(activeVoices.shift());
+    killVoice(activeVoices.shift());
   }
 }
 
-// Fix #6: Ramp gain to 0 over 20ms before disconnecting — eliminates pop
-function softKillVoice(entry) {
-  if (!entry || entry.killed) return;
-  entry.killed = true;
-  try {
-    if (entry.gain && audioCtxRef) {
-      const now = audioCtxRef.currentTime;
-      entry.gain.gain.setValueAtTime(entry.gain.gain.value || 0, now);
-      entry.gain.gain.linearRampToValueAtTime(0, now + 0.02);
-    }
-  } catch (e) {}
-  // Disconnect after ramp completes
-  setTimeout(() => {
-    try { if (entry.src) entry.src.stop(); } catch (e) {}
-    try { if (entry.src) entry.src.disconnect(); } catch (e) {}
-    try { if (entry.gain) entry.gain.disconnect(); } catch (e) {}
-    entry.src = null;
-    entry.gain = null;
-  }, 30);
-}
-
-// Hard kill — immediate disconnect, used by pruneVoices (voices already silent)
 function killVoice(entry) {
   if (!entry || entry.killed) return;
   entry.killed = true;
@@ -406,19 +383,10 @@ function pruneVoices(now) {
 }
 
 function fadeOutAllVoices(ctx) {
-  const now = ctx.currentTime;
+  // Kill all voices immediately — no setTimeout (crashes on 0.6.5).
+  // The small pop from immediate disconnect is preferable to a native crash.
   const toFade = activeVoices.splice(0, activeVoices.length);
-  for (const v of toFade) {
-    try {
-      if (v.gain && !v.killed) {
-        v.gain.gain.setValueAtTime(v.gain.gain.value || 0.5, now + 0.005);
-        v.gain.gain.linearRampToValueAtTime(0, now + 0.045);
-      }
-      if (v.src && !v.killed) { try { v.src.stop(now + 0.06); } catch (e) {} }
-    } catch (e) {}
-  }
-  // Delayed disconnect — still needed for fade to complete, but with kill guard
-  setTimeout(() => { for (const v of toFade) killVoice(v); }, 120);
+  for (const v of toFade) killVoice(v);
 }
 
 // ── Sample lookup ────────────────────────────────────────────

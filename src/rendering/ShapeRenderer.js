@@ -54,8 +54,8 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
 
   if (vertices.length === 0) return null;
 
-  const ringColor = isPanelShape ? color.main + '33' : color.main + '15';
-  const ringWidth = isPanelShape ? 2 : 1;
+  const ringColor = isPanelShape ? color.main + '30' : color.main + '18';
+  const ringWidth = 1.5;
 
   return (
     <Group opacity={opacity}>
@@ -127,13 +127,6 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
               cy={pos.y}
               r={stem.dotRadius}
               color={color.main}
-            />
-
-            <Circle
-              cx={pos.x - stem.dotRadius * 0.2}
-              cy={pos.y - stem.dotRadius * 0.25}
-              r={stem.dotRadius * 0.35}
-              color="rgba(255,255,255,0.5)"
             />
           </Group>
         );
