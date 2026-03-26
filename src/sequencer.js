@@ -2,36 +2,34 @@ import { getState, getShapes, loadScene } from './state.js';
 import { transitionScene, isAudioInitialized } from './audio/audioEngine.js';
 import { TIMING } from './constants.js';
 
-let cycleCount = 0;
-let lastCycleAngle = 0;
+let lastCycleNumber = -1;
+let cyclesSinceSceneStart = 0;
 let autoAdvanceEnabled = false;
 
 function initSequencer() {
   autoAdvanceEnabled = true;
 }
 
-function updateSequencer(clockAngle) {
+function updateSequencer(clockAngle, cycleNumber) {
   if (!autoAdvanceEnabled) return;
   const state = getState();
   if (state.scenes.length <= 1) return;
 
-  // Detect cycle completion (clock wraps past -PI/2 = 12 o'clock)
-  const normalized = ((clockAngle + Math.PI / 2) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
-  const prevNormalized = ((lastCycleAngle + Math.PI / 2) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
-
-  if (prevNormalized > Math.PI && normalized < Math.PI && normalized < 1) {
-    cycleCount++;
-    if (cycleCount >= TIMING.sceneCycles) {
+  // Use scheduler's authoritative cycle number instead of fragile angle detection
+  if (cycleNumber !== undefined && cycleNumber !== lastCycleNumber && lastCycleNumber >= 0) {
+    cyclesSinceSceneStart += (cycleNumber - lastCycleNumber);
+    if (cyclesSinceSceneStart >= TIMING.sceneCycles) {
       advanceScene();
-      cycleCount = 0;
+      cyclesSinceSceneStart = 0;
     }
   }
-
-  lastCycleAngle = clockAngle;
+  lastCycleNumber = cycleNumber;
 }
 
 function advanceScene() {
   const state = getState();
+  // Fix #12: guard against empty scenes array (% 0 = NaN)
+  if (!state.scenes || state.scenes.length === 0) return;
   const nextIndex = (state.activeSceneIndex + 1) % state.scenes.length;
   morphToScene(nextIndex);
 }
@@ -42,18 +40,13 @@ function morphToScene(targetIndex) {
   if (targetIndex < 0 || targetIndex >= state.scenes.length) return;
   if (!isAudioInitialized()) return;
 
-  // Fade out old voices smoothly, then load new scene
-  // The scheduler keeps running with continuous timing — no restart.
-  // New scene's shapes will be picked up on the next scheduler tick.
   loadScene(targetIndex);
   transitionScene();
-
-  // Don't manually trigger beat 0 — the scheduler handles it naturally
-  // since the clock hand continues smoothly through the transition.
 }
 
 function resetCycleCount() {
-  cycleCount = 0;
+  cyclesSinceSceneStart = 0;
+  lastCycleNumber = -1;
 }
 
 export { initSequencer, updateSequencer, morphToScene, resetCycleCount };

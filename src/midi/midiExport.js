@@ -6,20 +6,25 @@ import * as Sharing from 'expo-sharing';
 export async function exportMIDI() {
   try {
     // Dynamic import of midi-writer-js
-    const MidiWriter = await import('midi-writer-js');
+    const MidiWriterModule = await import('midi-writer-js');
+    const MidiWriter = MidiWriterModule.default || MidiWriterModule;
     const state = getState();
+    if (!state.scenes || state.scenes.length === 0) return;
     const tracks = [];
 
-    const maxShapes = Math.max(...state.scenes.map(s => s.shapes.length));
+    const maxShapes = Math.max(0, ...state.scenes.map(s => s.shapes.length));
+    if (maxShapes === 0) return;
+
+    const ticksPerCycle = 128 * TIMING.defaultCycleBeats;
 
     for (let si = 0; si < maxShapes; si++) {
       const track = new MidiWriter.Track();
       track.setTempo(state.bpm);
 
+      let tickOffset = 0;
       for (const scene of state.scenes) {
         if (si < scene.shapes.length) {
           const shape = scene.shapes[si];
-          const ticksPerCycle = 512;
           const sub = shape.subdivision || 1;
           const totalSteps = shape.sides * sub;
 
@@ -31,13 +36,14 @@ export async function exportMIDI() {
                 const step = steps[s];
                 if (step.muted) continue;
                 const pitches = step.pitches || [60];
+                const vel = step.velocity != null ? step.velocity : 85;
                 for (const pitch of pitches) {
                   const stepNum = vi * sub + s;
                   const noteEvent = new MidiWriter.NoteEvent({
                     pitch: pitch,
                     duration: 'T' + Math.max(1, Math.round(ticksPerCycle / totalSteps * 0.8)),
-                    velocity: Math.round((step.velocity / 127) * 100),
-                    startTick: (ci * ticksPerCycle) + Math.round(stepNum * ticksPerCycle / totalSteps),
+                    velocity: Math.max(1, Math.round((vel / 127) * 100)),
+                    startTick: tickOffset + (ci * ticksPerCycle) + Math.round(stepNum * ticksPerCycle / totalSteps),
                     channel: si + 1,
                   });
                   track.addEvent(noteEvent);
@@ -46,6 +52,7 @@ export async function exportMIDI() {
             }
           }
         }
+        tickOffset += TIMING.sceneCycles * ticksPerCycle;
       }
 
       tracks.push(track);

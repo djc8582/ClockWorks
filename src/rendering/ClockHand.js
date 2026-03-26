@@ -1,24 +1,28 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Group, Line, Circle, vec } from '@shopify/react-native-skia';
 import { useDerivedValue, useSharedValue } from 'react-native-reanimated';
 import { COLORS, DIMENSIONS, TIMING } from '../constants.js';
 
 const TRAIL_STEPS = 8;
-const TRAIL_FRACTIONS = Array.from({ length: TRAIL_STEPS }, (_, i) => i / TRAIL_STEPS);
+const TRAIL_FRACTIONS = Array.from({ length: TRAIL_STEPS }, (_, i) => (i + 1) / TRAIL_STEPS);
 const TRAIL_COLORS = TRAIL_FRACTIONS.map(t => `rgba(0,0,0,${0.04 * (1 - t)})`);
 const TRAIL_ANGLE = TIMING.clockTrailAngle;
 
 // ClockHand: angle is a Reanimated shared value. centerX/centerY/handLength
 // are bridged to shared values so useDerivedValue worklets never recreate.
 function ClockHandInner({ angle, centerX, centerY, handLength }) {
-  if (handLength <= 0) return null;
-
+  // Hooks must be called unconditionally (Rules of Hooks)
   const cx = useSharedValue(centerX);
   const cy = useSharedValue(centerY);
   const hl = useSharedValue(handLength);
-  cx.value = centerX;
-  cy.value = centerY;
-  hl.value = handLength;
+
+  useEffect(() => {
+    cx.value = centerX;
+    cy.value = centerY;
+    hl.value = handLength;
+  }, [centerX, centerY, handLength]);
+
+  if (handLength <= 0) return null;
 
   const center = useDerivedValue(() => vec(cx.value, cy.value));
   const endPoint = useDerivedValue(() => {

@@ -3,6 +3,7 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { COLORS, MAX_SCENES } from '../constants.js';
 import { getState, updateState, captureScene, loadScene, deleteScene } from '../state.js';
 import { rescheduleAll } from '../audio/audioEngine.js';
+import { resetCycleCount } from '../sequencer.js';
 import { useStore } from '../hooks/useStore.js';
 
 export default React.memo(function SceneStrip() {
@@ -13,6 +14,7 @@ export default React.memo(function SceneStrip() {
     const state = getState();
     if (index !== state.activeSceneIndex) {
       loadScene(index);
+      resetCycleCount();
       rescheduleAll();
     }
     updateState(s => {

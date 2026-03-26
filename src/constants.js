@@ -93,21 +93,21 @@ export const MAX_SUBDIVISION = 4;
 
 // ── Timbres ───────────────────────────────────────────────────
 export const TIMBRES = [
-  // Melodic
-  { id: "epiano",  label: "E.Piano",  category: "Keys" },
-  { id: "piano",   label: "Piano",    category: "Keys" },
+  // Keys
+  { id: "epiano",  label: "E.Piano",     category: "Keys" },
+  { id: "piano",   label: "Piano",       category: "Keys" },
   { id: "keys",    label: "Bright Keys", category: "Keys" },
-  { id: "organ",   label: "Organ",    category: "Keys" },
+  { id: "organ",   label: "Organ",       category: "Keys" },
+  // Mallet
   { id: "marimba", label: "Marimba",  category: "Mallet" },
   { id: "vibes",   label: "Vibes",    category: "Mallet" },
+  // String
   { id: "pluck",   label: "Pluck",    category: "String" },
   { id: "guitar",  label: "Guitar",   category: "String" },
-  { id: "strings", label: "Strings",  category: "String" },
-  { id: "bass",        label: "Bass",        category: "Bass" },
-  { id: "subbass",     label: "Sub Bass",    category: "Bass" },
-  { id: "electroflow", label: "Electroflow", category: "Synth" },
-  { id: "darkthought", label: "Dark Thought",category: "Synth" },
-  // Drum Kits — each vertex cycles through kick, snare, hihat, perc
+  { id: "nylon",   label: "Nylon",    category: "String" },
+  // Synth
+  { id: "synth",   label: "Synth",    category: "Synth" },
+  // Drum Kits
   { id: "drumkit1", label: "Vinyl Kit",  category: "Drums" },
   { id: "drumkit2", label: "Tight Kit",  category: "Drums" },
   { id: "drumkit3", label: "Soft Kit",   category: "Drums" },

@@ -14,6 +14,7 @@ export function useStore(selector) {
     try {
       return selectorRef.current ? selectorRef.current(state) : state;
     } catch (e) {
+      if (__DEV__) console.warn('[useStore] selector error:', e);
       return undefined;
     }
   }, []);

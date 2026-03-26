@@ -13,9 +13,3 @@ web-build/
 .env
 *.swp
 
-# Copyrighted audio samples (not for redistribution)
-assets/samples/*.wav
-assets/samples/*.m4a
-assets/samples/*.aif
-assets/samples/drums/*.wav
-assets/samples/drums/*.aif

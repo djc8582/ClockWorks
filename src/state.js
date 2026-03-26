@@ -1,7 +1,11 @@
-import { PITCH, MAX_SCENES } from './constants.js';
+import { PITCH, MAX_SCENES, MAX_SIDES, MAX_SHAPES, MAX_SUBDIVISION } from './constants.js';
 
 let state = null;
 const listeners = [];
+let isNotifying = false;
+let pendingNotify = false;
+let notifyDepth = 0;        // Fix #4: recursion depth counter
+const MAX_NOTIFY_DEPTH = 3; // Fix #4: safety net
 
 function createDefaultState() {
   return {
@@ -68,7 +72,12 @@ function setState(newState) {
 }
 
 function updateState(updater) {
-  updater(state);
+  try {
+    updater(state);
+  } catch (e) {
+    if (__DEV__) console.error('[state] updateState callback threw:', e?.message || e, e?.stack);
+    return;
+  }
   notifyListeners();
 }
 
@@ -80,29 +89,75 @@ function subscribe(listener) {
   };
 }
 
+// Fix #8: Clear all listeners — used by ErrorBoundary recovery to prevent
+// orphaned listeners from the crashed tree from firing on new state.
+function clearListeners() {
+  listeners.length = 0;
+}
+
 // Ensure all selectors see new references after any state change
 function refreshRefs() {
-  if (state.scenes) {
-    const active = state.activeSceneIndex;
-    const panel = state.ui ? state.ui.panelSceneIndex : active;
-    for (const idx of new Set([active, panel])) {
-      if (state.scenes[idx]) {
-        state.scenes[idx] = { ...state.scenes[idx], shapes: [...state.scenes[idx].shapes] };
+  try {
+    if (state.scenes) {
+      const active = state.activeSceneIndex;
+      const panel = state.ui ? state.ui.panelSceneIndex : active;
+      for (const idx of new Set([active, panel])) {
+        const scene = state.scenes[idx];
+        if (scene) {
+          if (!Array.isArray(scene.shapes)) {
+            scene.shapes = [];
+          }
+          state.scenes[idx] = {
+            ...scene,
+            shapes: scene.shapes.map(s => ({ ...s })),
+          };
+        }
       }
+      state.scenes = [...state.scenes];
     }
-    state.scenes = [...state.scenes];
+    if (state.ui) state.ui = { ...state.ui };
+    state = { ...state };
+  } catch (e) {
+    if (__DEV__) console.error('[state] refreshRefs crashed:', e?.message || e, e?.stack);
   }
-  state = { ...state };
 }
 
 function notifyListeners() {
-  refreshRefs();
-  for (const listener of listeners) {
-    listener(state);
+  // Coalesce nested updateState → notifyListeners calls into one notification
+  if (isNotifying) {
+    pendingNotify = true;
+    return;
+  }
+  isNotifying = true;
+  try {
+    refreshRefs();
+    // Snapshot listeners to prevent mutation during iteration
+    const snapshot = listeners.slice();
+    for (const listener of snapshot) {
+      try { listener(state); } catch (e) {
+        if (__DEV__) console.error('[state] listener threw:', e?.message || e);
+      }
+    }
+  } finally {
+    isNotifying = false;
+    if (pendingNotify) {
+      pendingNotify = false;
+      // Fix #4: cap recursion depth to prevent infinite loops from buggy listeners
+      notifyDepth++;
+      if (notifyDepth <= MAX_NOTIFY_DEPTH) {
+        notifyListeners();
+      } else {
+        if (__DEV__) console.warn('[state] notifyListeners recursion depth exceeded — dropping update');
+        notifyDepth = 0; // Only reset after we've stopped recursing
+      }
+    } else {
+      notifyDepth = 0; // Reset when no more pending — end of the chain
+    }
   }
 }
 
-const EMPTY_SCENE = { shapes: [] };
+const EMPTY_SHAPES = [];
+const EMPTY_SCENE = { shapes: EMPTY_SHAPES };
 
 function getActiveScene() {
   if (!state || !state.scenes || state.scenes.length === 0) return EMPTY_SCENE;
@@ -111,15 +166,26 @@ function getActiveScene() {
 }
 
 function getShapes() {
-  return getActiveScene().shapes || [];
+  return getActiveScene().shapes || EMPTY_SHAPES;
 }
 
 function getShapeById(id) {
   return getShapes().find(s => s.id === id);
 }
 
+// Fix #3: Safe active scene accessor for use inside updateState callbacks.
+// Clamps activeSceneIndex to valid range before accessing. Returns null if no scenes.
+function safeActiveScene(s) {
+  if (!s.scenes || s.scenes.length === 0) return null;
+  if (s.activeSceneIndex < 0 || s.activeSceneIndex >= s.scenes.length) {
+    s.activeSceneIndex = Math.max(0, s.scenes.length - 1);
+  }
+  return s.scenes[s.activeSceneIndex];
+}
+
+let shapeIdCounter = 0;
 function generateShapeId() {
-  return "shape-" + Date.now() + "-" + Math.floor(Math.random() * 1000);
+  return "shape-" + Date.now() + "-" + (shapeIdCounter++) + "-" + Math.floor(Math.random() * 1e6);
 }
 
 function captureScene() {
@@ -129,7 +195,7 @@ function captureScene() {
   for (const shape of snapshot.shapes) {
     shape.id = generateShapeId();
   }
-  state.scenes.push(snapshot);
+  state.scenes = [...state.scenes, snapshot];
   notifyListeners();
   return state.scenes.length - 1;
 }
@@ -143,9 +209,13 @@ function loadScene(index) {
 
 function deleteScene(index) {
   if (state.scenes.length <= 1) return;
+  if (index < 0 || index >= state.scenes.length) return;
   state.scenes.splice(index, 1);
   if (state.activeSceneIndex >= state.scenes.length) {
     state.activeSceneIndex = state.scenes.length - 1;
+  }
+  if (state.ui.panelSceneIndex >= state.scenes.length) {
+    state.ui.panelSceneIndex = state.scenes.length - 1;
   }
   notifyListeners();
 }
@@ -209,18 +279,31 @@ function deserializeState(hash) {
       ).join('')
     );
     const parsed = JSON.parse(json);
-    state.bpm = parsed.bpm;
-    state.scale = parsed.scale;
-    state.activeSceneIndex = parsed.activeSceneIndex;
-    state.scenes = parsed.scenes;
-    if (parsed.effects) {
-      state.effects = parsed.effects;
-    }
+    // Validate before assigning anything to state
     if (!Array.isArray(parsed.scenes)) throw new Error("Invalid state: scenes not an array");
-    // Migrate old format and validate
-    for (const scene of state.scenes) {
+    if (typeof parsed.bpm !== 'number' || isNaN(parsed.bpm)) throw new Error("Invalid bpm");
+    if (!Array.isArray(parsed.scale)) throw new Error("Invalid scale");
+    if (typeof parsed.activeSceneIndex !== 'number') throw new Error("Invalid activeSceneIndex");
+    // Migrate old format and validate on parsed data first
+    // Fix #7: Validate and clamp all numeric fields to prevent unbounded input
+    for (const scene of parsed.scenes) {
+      if (!scene.shapes) scene.shapes = [];
+      // Clamp shape count
+      if (scene.shapes.length > MAX_SHAPES) scene.shapes.length = MAX_SHAPES;
       for (const shape of scene.shapes) {
         if (!shape.subdivision) shape.subdivision = 1;
+        // Clamp sides and subdivision
+        if (typeof shape.sides !== 'number' || !isFinite(shape.sides)) shape.sides = 3;
+        shape.sides = Math.max(2, Math.min(MAX_SIDES, shape.sides));
+        shape.subdivision = Math.max(1, Math.min(MAX_SUBDIVISION, shape.subdivision || 1));
+        // Validate vertices array
+        if (!Array.isArray(shape.vertices)) shape.vertices = [];
+        // Truncate vertices to match sides
+        if (shape.vertices.length > shape.sides) shape.vertices.length = shape.sides;
+        // Pad if too few
+        while (shape.vertices.length < shape.sides) {
+          shape.vertices.push({ pitches: [PITCH.defaultPitch], velocity: PITCH.defaultVelocity, muted: false, subs: [] });
+        }
         for (const v of shape.vertices) {
           if (v.pitch !== undefined && !v.pitches) {
             v.pitches = [v.pitch];
@@ -241,6 +324,14 @@ function deserializeState(hash) {
         }
       }
     }
+    // All validation passed — now assign to state
+    state.bpm = parsed.bpm;
+    state.scale = parsed.scale;
+    state.activeSceneIndex = Math.max(0, Math.min(parsed.activeSceneIndex, parsed.scenes.length - 1));
+    state.scenes = parsed.scenes;
+    if (parsed.effects) {
+      state.effects = parsed.effects;
+    }
     notifyListeners();
     return true;
   } catch (e) {
@@ -258,6 +349,8 @@ export {
   getActiveScene,
   getShapes,
   getShapeById,
+  safeActiveScene,
+  clearListeners,
   generateShapeId,
   captureScene,
   loadScene,

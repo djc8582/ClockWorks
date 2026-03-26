@@ -1,13 +1,30 @@
 import { useMemo, useCallback } from 'react';
 import { Gesture } from 'react-native-gesture-handler';
-import { getState, getShapes, updateState, generateShapeId } from '../state.js';
+import { getState, getShapes, updateState, generateShapeId, safeActiveScene } from '../state.js';
 import { calculateRingRadii } from '../shapes.js';
 import { hitTest, hitTestGhostRing, getNextSideCount, getNextColorIndex } from './hitTesting.js';
 import { initAudio, pauseAudio, resumeAudio, rescheduleAll } from '../audio/audioEngine.js';
 import { DIMENSIONS, MAX_SHAPES, PITCH, TIMBRES, DRUM_TIMBRES } from '../constants.js';
 import { distanceBetween } from '../shapes.js';
 
-const CENTER_TAP_RADIUS = 30;
+const CENTER_TAP_RADIUS = 40;
+
+// Exported for the native Pressable play/pause button overlay
+export function handlePlayPause() {
+  const state = getState();
+  if (!state.ui.audioStarted) {
+    initAudio();
+    updateState(s => { s.ui.audioStarted = true; s.ui.playing = true; });
+    return;
+  }
+  if (state.ui.playing) {
+    pauseAudio();
+    updateState(s => { s.ui.playing = false; });
+  } else {
+    resumeAudio();
+    updateState(s => { s.ui.playing = true; });
+  }
+}
 
 // All gesture logic runs on JS thread via runOnJS
 function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
@@ -19,13 +36,22 @@ function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
     return;
   }
 
-  // Tap center = unified play/pause (also handles first-tap init)
+  // First tap anywhere: init audio, then process the actual tap target
+  let justStarted = false;
+  if (!state.ui.audioStarted) {
+    initAudio();
+    updateState(s => { s.ui.audioStarted = true; s.ui.playing = true; });
+    justStarted = true;
+  }
+
+  // Tap center = play/pause toggle
   const distFromCenter = distanceBetween(x, y, centerX, centerY);
-  if (distFromCenter < CENTER_TAP_RADIUS || !state.ui.audioStarted) {
-    if (!state.ui.audioStarted) {
-      initAudio();
-      updateState(s => { s.ui.audioStarted = true; s.ui.playing = true; });
-    } else if (state.ui.playing) {
+  if (distFromCenter < CENTER_TAP_RADIUS) {
+    // If we just started audio, it's already playing — don't toggle
+    if (justStarted) return;
+    // Re-read state since updateState above may have changed it
+    const current = getState();
+    if (current.ui.playing) {
       pauseAudio();
       updateState(s => { s.ui.playing = false; });
     } else {
@@ -58,10 +84,6 @@ function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
     });
     return;
   }
-}
-
-function handlePinchStart() {
-  return getState().ui.canvasZoom || 1.0;
 }
 
 function handlePinchUpdate(scale, startZoom) {
@@ -98,7 +120,7 @@ export function useCanvasGestures({ centerX, centerY, maxRadius, minRadius, widt
   }, []);
 
   const composed = useMemo(() =>
-    Gesture.Race(pinch, tap),
+    Gesture.Exclusive(pinch, tap),
     [tap, pinch]
   );
 
@@ -124,8 +146,11 @@ export function addNewShape(sides) {
     vertices.push({ pitches: [PITCH.defaultPitch], velocity: PITCH.defaultVelocity, muted: false, subs: [] });
   }
 
+  // Fix #3: bounds-check activeSceneIndex before mutating
   updateState(s => {
-    s.scenes[s.activeSceneIndex].shapes.push({
+    const scene = safeActiveScene(s);
+    if (!scene) return;
+    scene.shapes.push({
       id: newId, sides, colorIndex: newColor, timbre: newTimbre, volume: 1.0, subdivision: 1, vertices,
     });
     s.ui.panelShapeId = newId;

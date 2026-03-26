@@ -1,7 +1,7 @@
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useCallback, useEffect, useState } from 'react';
 import { View, ScrollView, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
 import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS } from '../constants.js';
-import { updateState } from '../state.js';
+import { updateState, safeActiveScene } from '../state.js';
 import { useStore } from '../hooks/useStore.js';
 import PianoRollCell from './PianoRollCell.js';
 
@@ -10,17 +10,20 @@ function getStepData(vertex, stepIndex) {
   return vertex.subs && vertex.subs[stepIndex - 1];
 }
 
+// Build all pitch rows for the current scale across the full MIDI range.
+// Also includes any out-of-scale pitches that are active in the shape.
 function buildRows(scale, shape) {
   const scaleSet = new Set(scale);
   const rowSet = new Set();
   for (let p = PITCH.max; p >= PITCH.min; p--) {
     if (scaleSet.has(p % 12)) rowSet.add(p);
   }
+  // Include any active pitches that may be outside the current scale
   for (const v of shape.vertices) {
-    if (v.pitches) for (const p of v.pitches) rowSet.add(p);
-    if (v.subs) {
+    if (v && v.pitches) for (const p of v.pitches) rowSet.add(p);
+    if (v && v.subs) {
       for (const sub of v.subs) {
-        if (sub.pitches) for (const p of sub.pitches) rowSet.add(p);
+        if (sub && sub.pitches) for (const p of sub.pitches) rowSet.add(p);
       }
     }
   }
@@ -36,10 +39,49 @@ export default function PianoRoll({ shape, color }) {
   return <MelodicGrid shape={shape} color={color} />;
 }
 
+// ── Scroll position preservation hook ────────────────────────
+// Fix #5: Only restores scroll on shape change, not every render.
+function useScrollPreserver(shapeId) {
+  const outerRef = useRef(null);
+  const innerRef = useRef(null);
+  const pos = useRef({ x: 0, y: 0 });
+  const prevShapeId = useRef(shapeId);
+
+  const onOuterScroll = useCallback((e) => {
+    pos.current.y = e.nativeEvent.contentOffset.y;
+  }, []);
+  const onInnerScroll = useCallback((e) => {
+    pos.current.x = e.nativeEvent.contentOffset.x;
+  }, []);
+
+  // Only restore scroll when returning to a shape we had a saved position for,
+  // NOT on every render (which fights user scrolling).
+  useEffect(() => {
+    if (prevShapeId.current !== shapeId) {
+      // Shape changed — don't restore old position, let the init-scroll effect handle it
+      pos.current = { x: 0, y: 0 };
+      prevShapeId.current = shapeId;
+      return;
+    }
+    // Same shape re-render — restore saved position
+    if (pos.current.y > 0 && outerRef.current) {
+      outerRef.current.scrollTo({ y: pos.current.y, animated: false });
+    }
+    if (pos.current.x > 0 && innerRef.current) {
+      innerRef.current.scrollTo({ x: pos.current.x, animated: false });
+    }
+  }, [shapeId]);
+
+  return { outerRef, innerRef, onOuterScroll, onInnerScroll, pos };
+}
+
 // ── Drum step sequencer ──────────────────────────────────────
+// Drum slots are encoded as pitches: 0=kick, 1=snare, 2=hihat, 3=perc.
+// Any slot can be active at any step — no vertex-to-slot restriction.
 function DrumGrid({ shape, color }) {
   const { width: screenWidth } = useWindowDimensions();
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
+  const { outerRef, innerRef, onOuterScroll, onInnerScroll } = useScrollPreserver(shape.id);
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
 
@@ -49,18 +91,33 @@ function DrumGrid({ shape, color }) {
 
   const slotLabels = DRUM_SLOTS || ['Kick', 'Snare', 'HiHat', 'Perc'];
 
-  function toggleStep(vi, si) {
+  // Fix #3: bounds-check activeSceneIndex
+  function toggleSlot(vi, si, slotIdx) {
     updateState(s => {
-      const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shape.id);
+      const scene = safeActiveScene(s);
+      if (!scene) return;
+      const sh = scene.shapes.find(ss => ss.id === shape.id);
       if (!sh || !sh.vertices[vi]) return;
       const sd = si === 0 ? sh.vertices[vi] : (sh.vertices[vi].subs && sh.vertices[vi].subs[si - 1]);
-      if (sd) sd.muted = !sd.muted;
+      if (!sd) return;
+      if (!sd.pitches) sd.pitches = [];
+      const idx = sd.pitches.indexOf(slotIdx);
+      if (idx !== -1) {
+        // Remove this slot
+        sd.pitches.splice(idx, 1);
+        if (sd.pitches.length === 0) sd.muted = true;
+      } else {
+        // Add this slot
+        sd.pitches.push(slotIdx);
+        sd.pitches.sort((a, b) => a - b);
+        sd.muted = false;
+      }
     });
   }
 
   return (
-    <ScrollView style={styles.outerScroll} nestedScrollEnabled>
-      <ScrollView horizontal style={styles.innerScroll} nestedScrollEnabled>
+    <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
+      <ScrollView ref={innerRef} horizontal style={styles.innerScroll} nestedScrollEnabled onScroll={onInnerScroll} scrollEventThrottle={16}>
         <View>
           {/* Column headers */}
           <View style={[styles.headerRow, { height: headerH }]}>
@@ -89,7 +146,7 @@ function DrumGrid({ shape, color }) {
             )}
           </View>
 
-          {/* Drum slot rows */}
+          {/* Drum slot rows — every cell is tappable */}
           {slotLabels.map((slot, slotIdx) => {
             const label = slot.charAt(0).toUpperCase() + slot.slice(1);
             return (
@@ -99,12 +156,9 @@ function DrumGrid({ shape, color }) {
                 </View>
                 {Array.from({ length: shape.sides }).map((_, vi) =>
                   Array.from({ length: sub }).map((_, s) => {
-                    // A drum step is "active" if vertex vi maps to this slot AND is not muted
-                    const vertexSlot = vi % slotLabels.length;
-                    const isThisSlot = vertexSlot === slotIdx;
                     const stepData = getStepData(shape.vertices[vi], s);
-                    const isMuted = stepData ? stepData.muted : false;
-                    const isActive = isThisSlot && !isMuted;
+                    const pitches = stepData ? (stepData.pitches || []) : [];
+                    const isActive = pitches.includes(slotIdx);
 
                     return (
                       <Pressable
@@ -115,16 +169,14 @@ function DrumGrid({ shape, color }) {
                           s === 0 && vi > 0 && styles.groupStart,
                           vi === selectedNode && styles.drumCellSelected,
                         ]}
-                        onPress={() => isThisSlot ? toggleStep(vi, s) : null}
+                        onPress={() => toggleSlot(vi, s, slotIdx)}
                       >
-                        {isThisSlot && (
-                          <View style={[
-                            styles.drumDot,
-                            isActive
-                              ? { backgroundColor: color.main }
-                              : { backgroundColor: 'rgba(0,0,0,0.08)' },
-                          ]} />
-                        )}
+                        <View style={[
+                          styles.drumDot,
+                          isActive
+                            ? { backgroundColor: color.main }
+                            : { backgroundColor: 'rgba(0,0,0,0.06)' },
+                        ]} />
                       </Pressable>
                     );
                   })
@@ -139,12 +191,16 @@ function DrumGrid({ shape, color }) {
 }
 
 // ── Melodic piano roll ───────────────────────────────────────
+// Fix #2: Row windowing — only renders visible rows + buffer. Reduces worst case
+// from 7008 components to ~600 (visible viewport only).
+const ROW_BUFFER = 4; // extra rows above/below viewport
+
 function MelodicGrid({ shape, color }) {
-  const { width: screenWidth } = useWindowDimensions();
+  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const scale = useStore(s => s.scale);
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
-  const scrollRef = useRef(null);
+  const { outerRef, innerRef, onOuterScroll: baseOuterScroll, onInnerScroll, pos } = useScrollPreserver(shape.id);
 
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
@@ -158,9 +214,61 @@ function MelodicGrid({ shape, color }) {
 
   const rows = useMemo(() => buildRows(scale, shape), [scale, shape]);
 
+  // Track scroll offset for row windowing
+  const [scrollY, setScrollY] = useState(0);
+  const scrollYRef = useRef(0);
+  const onOuterScroll = useCallback((e) => {
+    const y = e.nativeEvent.contentOffset.y;
+    baseOuterScroll(e);
+    scrollYRef.current = y;
+    // Batch scroll state updates to avoid per-pixel re-renders
+    const prev = scrollYRef.prevWindow || 0;
+    if (Math.abs(y - prev) > cellH * 2) {
+      scrollYRef.prevWindow = y;
+      setScrollY(y);
+    }
+  }, [baseOuterScroll, cellH]);
+
+  // Compute visible row window
+  const viewportH = screenHeight * 0.45; // approximate panel height
+  const firstVisible = Math.max(0, Math.floor(scrollY / cellH) - ROW_BUFFER);
+  const lastVisible = Math.min(rows.length - 1, Math.ceil((scrollY + viewportH) / cellH) + ROW_BUFFER);
+  const visibleRows = rows.slice(firstVisible, lastVisible + 1);
+  const topSpacer = firstVisible * cellH;
+  const bottomSpacer = Math.max(0, (rows.length - lastVisible - 1) * cellH);
+
+  const hasScrolledInit = useRef(null);
+
+  // Fix #5: Only scroll on shape change, not every render
+  useEffect(() => {
+    if (hasScrolledInit.current === shape.id || rows.length === 0) return;
+    hasScrolledInit.current = shape.id;
+    let sum = 0, count = 0;
+    for (const v of shape.vertices) {
+      if (v && v.pitches) for (const p of v.pitches) { sum += p; count++; }
+    }
+    const mid = count > 0 ? Math.round(sum / count) : 60;
+    let targetIdx = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < rows.length; i++) {
+      const d = Math.abs(rows[i] - mid);
+      if (d < bestDist) { bestDist = d; targetIdx = i; }
+    }
+    const targetY = Math.max(0, targetIdx * cellH - cellH * 3);
+    scrollYRef.current = targetY;
+    scrollYRef.prevWindow = targetY;
+    setScrollY(targetY);
+    requestAnimationFrame(() => {
+      outerRef.current?.scrollTo({ y: targetY, animated: false });
+    });
+  }, [shape.id]);
+
+  // Fix #3: bounds-check activeSceneIndex in every updateState callback
   function toggleMute(vi, si) {
     updateState(s => {
-      const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shape.id);
+      const scene = safeActiveScene(s);
+      if (!scene) return;
+      const sh = scene.shapes.find(ss => ss.id === shape.id);
       if (!sh || !sh.vertices[vi]) return;
       const sd = si === 0 ? sh.vertices[vi] : (sh.vertices[vi].subs && sh.vertices[vi].subs[si - 1]);
       if (sd) sd.muted = !sd.muted;
@@ -168,11 +276,14 @@ function MelodicGrid({ shape, color }) {
   }
 
   return (
-    <ScrollView style={styles.outerScroll}>
+    <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
       <ScrollView
-        ref={scrollRef}
+        ref={innerRef}
         horizontal
         style={styles.innerScroll}
+        nestedScrollEnabled
+        onScroll={onInnerScroll}
+        scrollEventThrottle={16}
       >
           <View>
             {/* Column headers */}
@@ -222,8 +333,9 @@ function MelodicGrid({ shape, color }) {
               )}
             </View>
 
-            {/* Pitch rows */}
-            {rows.map(pitch => {
+            {/* Fix #2: Windowed pitch rows — only visible rows are mounted */}
+            {topSpacer > 0 && <View style={{ height: topSpacer }} />}
+            {visibleRows.map(pitch => {
               const noteName = NOTE_NAMES[pitch % 12] + Math.floor(pitch / 12 - 1);
               const isC = pitch % 12 === 0;
 
@@ -266,6 +378,7 @@ function MelodicGrid({ shape, color }) {
                 </View>
               );
             })}
+            {bottomSpacer > 0 && <View style={{ height: bottomSpacer }} />}
           </View>
         </ScrollView>
       </ScrollView>

@@ -1,7 +1,8 @@
 import { AudioContext } from 'react-native-audio-api';
+import { AppState } from 'react-native';
 import { getState, getShapes, updateState } from '../state.js';
 import { TIMING } from '../constants.js';
-import { createTimbre, triggerTimbre, initSampleBank } from './timbres.js';
+import { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices } from './timbres.js';
 import { createScheduler } from './scheduler.js';
 
 let audioContext = null;
@@ -12,17 +13,23 @@ let masterGain = null;
 let synthMap = new Map();
 let onNoteTriggered = null;
 let masterGainValue = 0.7;  // Track gain in JS to avoid .value getter issues
+let appStateSubscription = null;
+let rescheduleThrottleId = null;
+const MAX_NOTES_PER_TICK = 12;
 
 function setNoteCallback(cb) { onNoteTriggered = cb; }
 
 function velocityToGain(velocity) {
-  return Math.max(0.01, (velocity / 127) * 0.85);
+  const v = Number(velocity) || 85;
+  return Math.max(0.01, Math.min(1, (v / 127) * 0.85));
 }
 
 function getNoteDuration(shape) {
-  const sub = shape.subdivision || 1;
-  const sides = shape.sides || 1;
-  const interval = cycleDuration / (sides * sub);
+  const sub = Math.max(1, shape.subdivision || 1);
+  const sides = Math.max(1, shape.sides || 1);
+  const total = sides * sub;
+  if (cycleDuration <= 0 || total <= 0) return 0.1;
+  const interval = cycleDuration / total;
   return Math.min(interval * 0.6, 0.5);
 }
 
@@ -44,8 +51,30 @@ function initAudio() {
     scheduler = createScheduler(audioContext, cycleDuration, onSchedulerTick);
     audioInitialized = true;
     scheduler.start();
+
+    // Suspend audio when app goes to background (iOS requirement)
+    if (!appStateSubscription) {
+      appStateSubscription = AppState.addEventListener('change', (nextState) => {
+        if (!audioInitialized) return;
+        if (nextState === 'background' || nextState === 'inactive') {
+          if (scheduler) scheduler.stop();
+          try { if (audioContext) audioContext.suspend(); } catch (e) {}
+        } else if (nextState === 'active') {
+          try {
+            if (audioContext && audioContext.state !== 'running') audioContext.resume();
+          } catch (e) {}
+          if (getState().ui.playing && scheduler) scheduler.resume();
+        }
+      });
+    }
   } catch (e) {
     console.warn('[audio] Init failed:', e?.message || e);
+    // Clean up partially created resources on failure
+    if (audioContext) {
+      try { audioContext.close(); } catch (e2) {}
+      audioContext = null;
+    }
+    masterGain = null;
     audioInitialized = false;
   }
 }
@@ -82,9 +111,11 @@ function swapTimbre(shape) { ensureSynth(shape); }
 
 function cleanupOrphanedSynths() {
   const usedTimbres = new Set(getShapes().map(s => s.timbre || 'epiano'));
+  const toDelete = [];
   for (const [timbre] of synthMap) {
-    if (!usedTimbres.has(timbre)) synthMap.delete(timbre);
+    if (!usedTimbres.has(timbre)) toDelete.push(timbre);
   }
+  for (const t of toDelete) synthMap.delete(t);
 }
 
 // ── Scheduler tick (non-overlapping window approach) ─────────
@@ -95,24 +126,29 @@ function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
     const shapes = getShapes();
     if (!shapes || shapes.length === 0) return;
     if (!cycleDur || cycleDur <= 0) return;
+    if (!isFinite(scheduleFrom) || !isFinite(scheduleTo)) return;
 
-    let noteCount = 0;
+    // Distribute note budget fairly across shapes (round-robin, not first-come)
+    const noteBudget = Math.min(MAX_NOTES_PER_TICK, Math.max(4, Math.floor(MAX_NOTES_PER_TICK / Math.max(1, shapes.length)) * shapes.length));
+    let totalNotes = 0;
 
     for (const shape of shapes) {
+      if (totalNotes >= noteBudget) break;
       if (!shape || !shape.vertices) continue;
       const synth = ensureSynth(shape);
       if (!synth) continue;
 
       const sides = shape.sides;
       if (!sides || sides <= 0) continue;
-      const sub = shape.subdivision || 1;
+      const sub = Math.min(shape.subdivision || 1, 4);
       const interval = cycleDur / sides;
       const subInterval = interval / sub;
 
       const relFrom = scheduleFrom - transportStart;
       const relTo = scheduleTo - transportStart;
+      if (!isFinite(relFrom) || !isFinite(relTo)) continue;
       const firstCycle = Math.max(0, Math.floor(relFrom / cycleDur));
-      const lastCycle = Math.floor(relTo / cycleDur);
+      const lastCycle = Math.min(firstCycle + 2, Math.floor(relTo / cycleDur)); // Cap to 2 cycles per tick
 
       for (let cycle = firstCycle; cycle <= lastCycle; cycle++) {
         const cycleStart = transportStart + cycle * cycleDur;
@@ -127,9 +163,8 @@ function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
             const stepData = s === 0 ? v : (v.subs && v.subs[s - 1]);
             if (!stepData || stepData.muted) continue;
 
-            // Cap notes per tick to prevent JSI bridge overload with many shapes
-            if (noteCount >= 12) return;
-            noteCount++;
+            if (totalNotes >= noteBudget) break;
+            totalNotes++;
 
             const vel = velocityToGain(stepData.velocity || 85) * (shape.volume != null ? shape.volume : 1);
             const dur = getNoteDuration(shape);
@@ -153,10 +188,10 @@ function triggerStep(shape, stepData, vertexIndex) {
   if (!stepData || stepData.muted || !audioContext || !masterGain) return;
   const synth = ensureSynth(shape);
   if (!synth) return;
-  const vel = velocityToGain(stepData.velocity || 85);
+  const vel = velocityToGain(stepData.velocity || 85) * (shape.volume != null ? shape.volume : 1);
   const dur = getNoteDuration(shape);
   try {
-    triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur);
+    triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur, undefined, vertexIndex);
   } catch (e) {}
 }
 
@@ -191,30 +226,35 @@ function getTargetGain() {
 }
 
 function rescheduleAll() {
+  try {
   updateCycleDuration();
   if (audioInitialized && scheduler) {
     cleanupOrphanedSynths();
   }
-  // Scale master gain to prevent clipping with multiple shapes
-  // Use now+0.02 to avoid collisions with close-together setValueAtTime calls
-  // (react-native-audio-api 0.6.x silently drops rapid setValueAtTime calls)
   if (audioContext && masterGain) {
     try {
       const target = getTargetGain();
+      if (!isFinite(target) || target < 0) return;
       const now = audioContext.currentTime;
-      masterGain.gain.setValueAtTime(masterGainValue, now + 0.02);
-      masterGain.gain.linearRampToValueAtTime(target, now + 0.07);
+      if (!isFinite(now)) return;
+      // Note: cancelScheduledValues crashes on react-native-audio-api 0.6.5
+      // (native null deref in ParamChangeEvent deque). Use setValueAtTime to
+      // override any in-progress ramp instead.
+      masterGain.gain.setValueAtTime(masterGainValue, now);
+      masterGain.gain.linearRampToValueAtTime(target, now + 0.05);
       masterGainValue = target;
     } catch (e) {}
   }
+  } catch (e) {
+    if (__DEV__) console.warn('[audio] rescheduleAll error:', e?.message || e);
+  }
 }
 
-// Scene transition: old voices ring out naturally via their envelopes.
-// New scene starts from beat 0 via resetScheduleWindow.
-// Brief master gain duck masks the crossfade seam.
+// Scene transition: fade out old voices, reset schedule, duck master gain.
 function transitionScene() {
   updateCycleDuration();
   if (audioInitialized && scheduler) {
+    if (audioContext) fadeOutAllVoices(audioContext);
     cleanupOrphanedSynths();
     scheduler.resetScheduleWindow();
   }
@@ -222,9 +262,8 @@ function transitionScene() {
     try {
       const target = getTargetGain();
       const now = audioContext.currentTime;
-      // Brief duck to 60% over 20ms, then rise to target over 80ms
-      // This masks the amplitude spike from overlapping old+new voices
-      masterGain.gain.setValueAtTime(masterGainValue, now + 0.001);
+      if (!isFinite(target) || !isFinite(now) || target < 0) return;
+      masterGain.gain.setValueAtTime(masterGainValue, now);
       masterGain.gain.linearRampToValueAtTime(masterGainValue * 0.6, now + 0.02);
       masterGain.gain.linearRampToValueAtTime(target, now + 0.10);
       masterGainValue = target;
@@ -242,7 +281,7 @@ function pauseAudio() {
 function resumeAudio() {
   if (!audioInitialized || !scheduler) return;
   try { if (audioContext && audioContext.resume) audioContext.resume(); } catch (e) {}
-  scheduler.start();
+  scheduler.resume();
 }
 
 // ── Exports ─────────────────────────────────────────────────
@@ -255,7 +294,7 @@ function getTransportSeconds() {
 }
 
 export {
-  initAudio, pauseAudio, resumeAudio, updateBPM, rescheduleAll, transitionScene,
+  initAudio, pauseAudio, resumeAudio, updateBPM, updateCycleDuration, rescheduleAll, transitionScene,
   triggerNote, playPreview, swapTimbre, isAudioInitialized, getTransportSeconds,
   getCycleDuration, ensureSynth, setNoteCallback, getAudioContext,
 };

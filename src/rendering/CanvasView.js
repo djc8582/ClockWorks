@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback } from 'react';
-import { View } from 'react-native';
+import { View, Pressable, StyleSheet } from 'react-native';
 import { Canvas, Group, Rect, RadialGradient, vec, Circle, Path as SkiaPath } from '@shopify/react-native-skia';
 import { GestureDetector } from 'react-native-gesture-handler';
 import ShapeRenderer from './ShapeRenderer.js';
@@ -8,9 +8,11 @@ import GhostRing from './GhostRing.js';
 import { COLORS, DIMENSIONS, MAX_SHAPES } from '../constants.js';
 import { calculateRingRadii } from '../shapes.js';
 import { useStore } from '../hooks/useStore.js';
-import { useCanvasGestures } from '../gestures/canvasGestures.js';
+import { useCanvasGestures, handlePlayPause } from '../gestures/canvasGestures.js';
 import { useClockSync } from '../hooks/useClockSync.js';
 import { getGhostRadius } from '../gestures/hitTesting.js';
+
+const EMPTY_SHAPES = [];
 
 export default React.memo(function CanvasView({ onLayout: onLayoutProp }) {
   const [layout, setLayout] = useState({ width: 300, height: 300 });
@@ -29,7 +31,7 @@ export default React.memo(function CanvasView({ onLayout: onLayoutProp }) {
     return { centerX: cx, centerY: cy, maxRadius: maxR, minRadius: maxR * DIMENSIONS.minRadiusFraction };
   }, [layout.width, layout.height]);
 
-  const shapes = useStore(s => s.scenes[s.activeSceneIndex]?.shapes || []);
+  const shapes = useStore(s => s.scenes[s.activeSceneIndex]?.shapes || EMPTY_SHAPES);
   const canvasZoom = useStore(s => s.ui.canvasZoom || 1.0);
   const panelShapeId = useStore(s => s.ui.panelShapeId);
   const selectedNodeIndex = useStore(s => s.ui.selectedNodeIndex);
@@ -128,26 +130,44 @@ export default React.memo(function CanvasView({ onLayout: onLayoutProp }) {
             />
           )}
 
-          {/* Unified play/pause button */}
+          {/* Play/pause visual indicator (Skia-drawn) */}
           <Group>
             {!audioStarted && (
-              <Rect x={0} y={0} width={layout.width} height={layout.height} color="rgba(0,0,0,0.15)" />
+              <Rect x={0} y={0} width={layout.width} height={layout.height} color="rgba(0,0,0,0.12)" />
             )}
             <Circle
               cx={centerX}
               cy={centerY}
-              r={playing ? 18 : 36}
-              color={playing ? 'rgba(0,0,0,0.05)' : COLORS.shapes[0].main}
+              r={playing ? 20 : 36}
+              color={playing ? 'rgba(0,0,0,0.04)' : COLORS.shapes[0].main}
             />
             <SkiaPath
               path={playing ? pausePath : playPath}
-              color={playing ? 'rgba(0,0,0,0.2)' : 'white'}
+              color={playing ? 'rgba(0,0,0,0.15)' : 'white'}
             />
           </Group>
         </Canvas>
       </GestureDetector>
+
+      {/* Native Pressable overlay for instant play/pause response */}
+      <Pressable
+        style={[
+          canvasStyles.playBtn,
+          { left: centerX - 30, top: centerY - 30 },
+        ]}
+        onPress={handlePlayPause}
+      />
     </View>
   );
 });
 
 const GRADIENT_COLORS = [COLORS.bgGradientCenter, COLORS.bg];
+
+const canvasStyles = StyleSheet.create({
+  playBtn: {
+    position: 'absolute',
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+  },
+});

@@ -3,7 +3,7 @@ import { View, Text, Pressable, StyleSheet } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { COLORS } from '../constants.js';
 import { updateState } from '../state.js';
-import { updateBPM } from '../audio/audioEngine.js';
+import { updateCycleDuration, rescheduleAll } from '../audio/audioEngine.js';
 import { useStore } from '../hooks/useStore.js';
 
 export default React.memo(function TopBar() {
@@ -19,8 +19,9 @@ export default React.memo(function TopBar() {
   const onBpmChange = useCallback((val) => {
     const newBpm = Math.round(val);
     updateState(s => { s.bpm = newBpm; });
+    updateCycleDuration(); // Update timing immediately to avoid desync
     clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => updateBPM(newBpm), 50);
+    debounceRef.current = setTimeout(() => rescheduleAll(), 50);
   }, []);
 
   function toggleMixer() {

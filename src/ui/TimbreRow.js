@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, Pressable, StyleSheet, Modal, ScrollView } from 'react-native';
-import { COLORS, TIMBRES, SCALE_DEFINITIONS, NOTE_NAMES } from '../constants.js';
-import { updateState } from '../state.js';
+import { COLORS, TIMBRES, DRUM_TIMBRES, SCALE_DEFINITIONS, NOTE_NAMES, PITCH } from '../constants.js';
+import { updateState, safeActiveScene } from '../state.js';
 import { swapTimbre, rescheduleAll } from '../audio/audioEngine.js';
 import { setScalePreset, getCurrentScaleName } from '../scale.js';
 
@@ -26,9 +26,41 @@ export default function TimbreRow({ shape, color }) {
 
   function onTimbrePress(timbreId) {
     const shapeId = shape.id;
+    const wasDrum = DRUM_TIMBRES.has(shape.timbre);
+    const isDrum = DRUM_TIMBRES.has(timbreId);
+    // Fix #3: bounds-check activeSceneIndex
     updateState(s => {
-      const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shapeId);
-      if (sh) sh.timbre = timbreId;
+      const scene = safeActiveScene(s);
+      if (!scene) return;
+      const sh = scene.shapes.find(ss => ss.id === shapeId);
+      if (!sh) return;
+      sh.timbre = timbreId;
+      // Convert pitches when switching between melodic ↔ drum
+      if (isDrum && !wasDrum) {
+        // Melodic → drum: set each vertex to its slot (kick/snare/hihat/perc cycling)
+        for (let i = 0; i < sh.vertices.length; i++) {
+          sh.vertices[i].pitches = [i % 4];
+          sh.vertices[i].muted = false;
+          if (sh.vertices[i].subs) {
+            for (const sub of sh.vertices[i].subs) {
+              sub.pitches = [];
+              sub.muted = true;
+            }
+          }
+        }
+      } else if (!isDrum && wasDrum) {
+        // Drum → melodic: reset to default melodic pitches
+        for (const v of sh.vertices) {
+          v.pitches = [PITCH.defaultPitch];
+          v.muted = false;
+          if (v.subs) {
+            for (const sub of v.subs) {
+              sub.pitches = [PITCH.defaultPitch];
+              sub.muted = false;
+            }
+          }
+        }
+      }
     });
     swapTimbre({ ...shape, timbre: timbreId });
     rescheduleAll();

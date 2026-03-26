@@ -1,9 +1,12 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { COLORS, TIMBRES } from '../constants.js';
-import { updateState } from '../state.js';
+import { updateState, safeActiveScene } from '../state.js';
+import { rescheduleAll } from '../audio/audioEngine.js';
 import { useStore } from '../hooks/useStore.js';
+
+const EMPTY_SHAPES = [];
 
 const SHAPE_NAMES = {
   2: 'Line', 3: 'Tri', 4: 'Sq', 5: 'Pent',
@@ -16,13 +19,23 @@ function getShapeName(sides) {
 }
 
 export default function Mixer() {
-  const shapes = useStore(s => s.scenes[s.activeSceneIndex]?.shapes || []);
+  const shapes = useStore(s => s.scenes[s.activeSceneIndex]?.shapes || EMPTY_SHAPES);
+  // Fix #11: throttle rescheduleAll to prevent audio artifacts from rapid slider
+  const rescheduleTimer = useRef(null);
 
   function onVolumeChange(shapeId, value) {
     updateState(s => {
-      const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shapeId);
+      const scene = safeActiveScene(s);
+      if (!scene) return;
+      const sh = scene.shapes.find(ss => ss.id === shapeId);
       if (sh) sh.volume = Math.round(value * 100) / 100;
     });
+    if (!rescheduleTimer.current) {
+      rescheduleTimer.current = setTimeout(() => {
+        rescheduleTimer.current = null;
+        rescheduleAll();
+      }, 50);
+    }
   }
 
   if (shapes.length === 0) {

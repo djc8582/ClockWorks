@@ -26,7 +26,7 @@ function snapPitchToScale(pitch) {
   const scale = state.scale;
   if (scale.length === 12) return pitch; // chromatic, no snapping
 
-  const pitchClass = pitch % 12;
+  const pitchClass = ((pitch % 12) + 12) % 12;
   if (scale.includes(pitchClass)) return pitch;
 
   // Find nearest active pitch class
@@ -55,9 +55,12 @@ function snapPitchToScale(pitch) {
   return Math.max(PITCH.min, Math.min(PITCH.max, snapped));
 }
 
+// Fix #3: bounds-check activeSceneIndex
 function snapAllVerticesToScale() {
   updateState(s => {
-    const scene = s.scenes[s.activeSceneIndex];
+    const idx = Math.max(0, Math.min(s.activeSceneIndex, s.scenes.length - 1));
+    const scene = s.scenes[idx];
+    if (!scene) return;
     for (const shape of scene.shapes) {
       for (const v of shape.vertices) {
         if (!v.muted && v.pitches) {
@@ -101,6 +104,7 @@ function setScalePreset(name, root) {
   const scale = intervals.map(i => (i + root) % 12).sort((a, b) => a - b);
   updateState(s => { s.scale = scale; });
   snapAllVerticesToScale();
+  detectScale();
 }
 
 function getCurrentScaleName() {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Pressable, StyleSheet } from 'react-native';
 import { COLORS } from '../constants.js';
-import { getState, updateState } from '../state.js';
+import { getState, updateState, safeActiveScene } from '../state.js';
 import { playPreview } from '../audio/audioEngine.js';
 
 function getStepData(vertex, stepIndex) {
@@ -36,9 +36,12 @@ export default React.memo(function PianoRollCell({
     const pitches = stepData.pitches || [];
     const hasPitch = pitches.includes(pitch);
 
+    // Fix #3: bounds-check activeSceneIndex in every updateState callback
     if (hasPitch && !stepData.muted) {
       updateState(s => {
-        const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shapeId);
+        const scene = safeActiveScene(s);
+        if (!scene) return;
+        const sh = scene.shapes.find(ss => ss.id === shapeId);
         if (!sh || !sh.vertices[vertexIndex]) return;
         const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : (sh.vertices[vertexIndex].subs && sh.vertices[vertexIndex].subs[stepIndex - 1]);
         if (!sd || !sd.pitches) return;
@@ -51,7 +54,9 @@ export default React.memo(function PianoRollCell({
       });
     } else {
       updateState(s => {
-        const sh = s.scenes[s.activeSceneIndex].shapes.find(ss => ss.id === shapeId);
+        const scene = safeActiveScene(s);
+        if (!scene) return;
+        const sh = scene.shapes.find(ss => ss.id === shapeId);
         if (!sh || !sh.vertices[vertexIndex]) return;
         const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : (sh.vertices[vertexIndex].subs && sh.vertices[vertexIndex].subs[stepIndex - 1]);
         if (!sd) return;
@@ -61,10 +66,10 @@ export default React.memo(function PianoRollCell({
           sd.pitches.sort((a, b) => a - b);
         }
         if (sd.muted) sd.muted = false;
-        s.ui.selectedNodeIndex = vertexIndex;
       });
 
-      const shape2 = getState().scenes[getState().activeSceneIndex]?.shapes.find(s => s.id === shapeId);
+      const currentState = getState();
+      const shape2 = currentState.scenes[currentState.activeSceneIndex]?.shapes?.find(s => s.id === shapeId);
       if (shape2) playPreview(shape2, vertexIndex, stepIndex);
     }
   }
