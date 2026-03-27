@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { COLORS, MIN_SIDES, MAX_SIDES, MAX_SUBDIVISION } from '../constants.js';
-import { getState, updateState, generateShapeId, safeActiveScene } from '../state.js';
+import { getState, updateState, generateShapeId, safePanelScene } from '../state.js';
 import { rescheduleAll } from '../audio/audioEngine.js';
 import { PITCH } from '../constants.js';
 
@@ -31,7 +31,7 @@ export default function PanelHeader({ shape, color }) {
 
     // Fix #3: bounds-check activeSceneIndex
     updateState(s => {
-      const scene = safeActiveScene(s);
+      const scene = safePanelScene(s);
       if (!scene) return;
       const sh = scene.shapes.find(ss => ss.id === shapeId);
       if (!sh) return;
@@ -59,7 +59,7 @@ export default function PanelHeader({ shape, color }) {
 
     // Fix #3: bounds-check activeSceneIndex
     updateState(s => {
-      const scene = safeActiveScene(s);
+      const scene = safePanelScene(s);
       if (!scene) return;
       const sh = scene.shapes.find(ss => ss.id === shapeId);
       if (!sh) return;
@@ -81,7 +81,7 @@ export default function PanelHeader({ shape, color }) {
   function deleteShape() {
     // Fix #3: bounds-check activeSceneIndex
     updateState(s => {
-      const sc = safeActiveScene(s);
+      const sc = safePanelScene(s);
       if (!sc) return;
       sc.shapes = sc.shapes.filter(sh => sh.id !== shapeId);
       if (sc.shapes.length === 0) {

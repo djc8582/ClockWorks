@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, Pressable, StyleSheet, Modal, ScrollView } from 'react-native';
 import { COLORS, TIMBRES, DRUM_TIMBRES, SCALE_DEFINITIONS, NOTE_NAMES, PITCH } from '../constants.js';
-import { updateState, safeActiveScene } from '../state.js';
+import { updateState, safePanelScene } from '../state.js';
 import { swapTimbre, rescheduleAll } from '../audio/audioEngine.js';
 import { setScalePreset, getCurrentScaleName } from '../scale.js';
 
@@ -30,7 +30,7 @@ export default function TimbreRow({ shape, color }) {
     const isDrum = DRUM_TIMBRES.has(timbreId);
     // Fix #3: bounds-check activeSceneIndex
     updateState(s => {
-      const scene = safeActiveScene(s);
+      const scene = safePanelScene(s);
       if (!scene) return;
       const sh = scene.shapes.find(ss => ss.id === shapeId);
       if (!sh) return;

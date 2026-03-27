@@ -113,6 +113,10 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
     return elapsed % _cycleDuration;
   }
 
+  function getElapsed(currentTime) {
+    return Math.max(0, currentTime - startTime);
+  }
+
   function getCycleNumber(currentTime) {
     return Math.floor((currentTime - startTime) / _cycleDuration);
   }
@@ -127,5 +131,5 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
 
   function isRunning() { return running; }
 
-  return { start, stop, resume, isRunning, setCycleDuration, resetScheduleWindow, getLoopPosition, getCycleNumber, getSeconds, getStartTime };
+  return { start, stop, resume, isRunning, setCycleDuration, resetScheduleWindow, getLoopPosition, getElapsed, getCycleNumber, getSeconds, getStartTime };
 }

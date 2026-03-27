@@ -55,11 +55,11 @@ function snapPitchToScale(pitch) {
   return Math.max(PITCH.min, Math.min(PITCH.max, snapped));
 }
 
-// Fix #3: bounds-check activeSceneIndex
+// Snap vertices in the currently EDITED scene (panelSceneIndex)
 function snapAllVerticesToScale() {
   updateState(s => {
-    const idx = Math.max(0, Math.min(s.activeSceneIndex, s.scenes.length - 1));
-    const scene = s.scenes[idx];
+    const idx = s.ui ? s.ui.panelSceneIndex : 0;
+    const scene = s.scenes[Math.max(0, Math.min(idx, s.scenes.length - 1))];
     if (!scene) return;
     for (const shape of scene.shapes) {
       for (const v of shape.vertices) {

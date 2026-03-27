@@ -262,11 +262,11 @@ function rescheduleAll() {
   }
 }
 
-// Scene transition: fade out old voices, reset schedule, duck master gain.
+// Scene transition: let old voices ring out naturally, reset schedule for new scene.
 function transitionScene() {
   updateCycleDuration();
   if (audioInitialized && scheduler) {
-    if (audioContext) fadeOutAllVoices(audioContext);
+    // Don't kill old voices — let them decay naturally for smooth crossfade
     cleanupOrphanedSynths();
     scheduler.resetScheduleWindow();
   }
@@ -302,13 +302,19 @@ function getAudioContext() { return audioContext; }
 
 function getTransportSeconds() {
   if (!audioInitialized || !scheduler) return 0;
-  // Return 0 until the scheduler is actually running — prevents clock jump on init
   if (!scheduler.isRunning()) return 0;
   return scheduler.getLoopPosition(audioContext.currentTime);
 }
 
+// Raw elapsed time (not wrapped) — used by sequencer to count cycles
+function getElapsedSeconds() {
+  if (!audioInitialized || !scheduler) return 0;
+  if (!scheduler.isRunning()) return 0;
+  return scheduler.getElapsed(audioContext.currentTime);
+}
+
 export {
   initAudio, startPlayback, pauseAudio, resumeAudio, updateBPM, updateCycleDuration, rescheduleAll, transitionScene,
-  triggerNote, playPreview, swapTimbre, isAudioInitialized, getTransportSeconds,
+  triggerNote, playPreview, swapTimbre, isAudioInitialized, getTransportSeconds, getElapsedSeconds,
   getCycleDuration, ensureSynth, setNoteCallback, getAudioContext,
 };

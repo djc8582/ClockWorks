@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Pressable, StyleSheet } from 'react-native';
 import { COLORS } from '../constants.js';
-import { getState, updateState, safeActiveScene } from '../state.js';
+import { getState, updateState, safePanelScene } from '../state.js';
 import { playPreview } from '../audio/audioEngine.js';
 
 function getStepData(vertex, stepIndex) {
@@ -26,7 +26,8 @@ export default React.memo(function PianoRollCell({
 }) {
   function onPress() {
     const state = getState();
-    const scene = state.scenes[state.activeSceneIndex];
+    const idx = state.ui ? state.ui.panelSceneIndex : 0;
+    const scene = state.scenes[idx];
     if (!scene) return;
     const shape = scene.shapes.find(s => s.id === shapeId);
     if (!shape || !shape.vertices[vertexIndex]) return;
@@ -39,7 +40,7 @@ export default React.memo(function PianoRollCell({
     // Fix #3: bounds-check activeSceneIndex in every updateState callback
     if (hasPitch && !stepData.muted) {
       updateState(s => {
-        const scene = safeActiveScene(s);
+        const scene = safePanelScene(s);
         if (!scene) return;
         const sh = scene.shapes.find(ss => ss.id === shapeId);
         if (!sh || !sh.vertices[vertexIndex]) return;
@@ -54,7 +55,7 @@ export default React.memo(function PianoRollCell({
       });
     } else {
       updateState(s => {
-        const scene = safeActiveScene(s);
+        const scene = safePanelScene(s);
         if (!scene) return;
         const sh = scene.shapes.find(ss => ss.id === shapeId);
         if (!sh || !sh.vertices[vertexIndex]) return;
@@ -69,7 +70,8 @@ export default React.memo(function PianoRollCell({
       });
 
       const currentState = getState();
-      const shape2 = currentState.scenes[currentState.activeSceneIndex]?.shapes?.find(s => s.id === shapeId);
+      const pidx = currentState.ui ? currentState.ui.panelSceneIndex : 0;
+      const shape2 = currentState.scenes[pidx]?.shapes?.find(s => s.id === shapeId);
       if (shape2) playPreview(shape2, vertexIndex, stepIndex);
     }
   }

@@ -64,7 +64,7 @@ export default React.memo(function SceneStrip() {
     }
 
     if (!isEnabled) {
-      // Tap empty slot → copy the currently edited scene into it, enable
+      // Tap empty slot → copy scene into it, enable, and select for editing — all in one update
       updateState(s => {
         const srcScene = s.scenes[s.ui.panelSceneIndex];
         const copy = JSON.parse(JSON.stringify(srcScene || { shapes: [] }));
@@ -73,15 +73,21 @@ export default React.memo(function SceneStrip() {
         }
         s.scenes[index] = copy;
         s.enabledSlots[index] = true;
+        s.ui.panelSceneIndex = index;
+        s.ui.panelShapeId = copy.shapes.length > 0 ? copy.shapes[0].id : null;
+        s.ui.selectedNodeIndex = 0;
       });
       rebuildPlaybackOrder();
       rescheduleAll();
+      return;
     }
 
-    // Select this slot for editing (does NOT change what's playing)
+    // Select already-enabled slot for editing
     updateState(s => {
       s.ui.panelSceneIndex = index;
-      s.ui.panelShapeId = null;
+      const scene = s.scenes[index];
+      s.ui.panelShapeId = scene && scene.shapes.length > 0 ? scene.shapes[0].id : null;
+      s.ui.selectedNodeIndex = 0;
     });
   }
 

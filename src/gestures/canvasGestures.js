@@ -1,6 +1,6 @@
 import { useMemo, useCallback } from 'react';
 import { Gesture } from 'react-native-gesture-handler';
-import { getState, getShapes, updateState, generateShapeId, safeActiveScene } from '../state.js';
+import { getState, getShapes, updateState, generateShapeId, safePanelScene } from '../state.js';
 import { calculateRingRadii } from '../shapes.js';
 import { hitTest, hitTestGhostRing, getNextSideCount, getNextColorIndex } from './hitTesting.js';
 import { initAudio, startPlayback, pauseAudio, resumeAudio, rescheduleAll } from '../audio/audioEngine.js';
@@ -145,7 +145,7 @@ export function addNewShape(sides) {
 
   // Fix #3: bounds-check activeSceneIndex before mutating
   updateState(s => {
-    const scene = safeActiveScene(s);
+    const scene = safePanelScene(s);
     if (!scene) return;
     scene.shapes.push({
       id: newId, sides, colorIndex: newColor, timbre: newTimbre, volume: 1.0, subdivision: 1, vertices,

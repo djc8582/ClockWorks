@@ -1,7 +1,8 @@
 import React, { useMemo, useRef, useCallback, useEffect, useState } from 'react';
 import { View, ScrollView, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
+import { GestureDetector, Gesture, ScrollView as GHScrollView } from 'react-native-gesture-handler';
 import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS, DIMENSIONS } from '../constants.js';
-import { updateState, safeActiveScene } from '../state.js';
+import { updateState, safePanelScene } from '../state.js';
 import { useStore } from '../hooks/useStore.js';
 import PianoRollCell from './PianoRollCell.js';
 
@@ -39,32 +40,49 @@ export default function PianoRoll({ shape, color }) {
   return <MelodicGrid shape={shape} color={color} />;
 }
 
-// ── Zoom controls ────────────────────────────────────────────
-function ZoomControls() {
-  const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
+// ── Pinch-to-zoom (GarageBand-style: axis-locked based on finger orientation) ──
+function usePianoZoom() {
+  const rollZoomH = useStore(s => s.ui.rollZoom || 1.0);
+  const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
+  const startH = useRef(1);
+  const startV = useRef(1);
+  const axis = useRef(null); // 'h' or 'v', locked on start
+  const scrollEnabled = useRef(true);
 
-  function zoomIn() {
-    updateState(s => {
-      s.ui.rollZoom = Math.min(DIMENSIONS.rollZoomMax, (s.ui.rollZoom || 1) + 0.25);
-    });
-  }
-  function zoomOut() {
-    updateState(s => {
-      s.ui.rollZoom = Math.max(DIMENSIONS.rollZoomMin, (s.ui.rollZoom || 1) - 0.25);
-    });
-  }
-
-  return (
-    <View style={styles.zoomControls}>
-      <Pressable style={styles.zoomBtn} onPress={zoomOut}>
-        <Text style={styles.zoomBtnText}>{'\u2212'}</Text>
-      </Pressable>
-      <Text style={styles.zoomLabel}>{Math.round(rollZoom * 100)}%</Text>
-      <Pressable style={styles.zoomBtn} onPress={zoomIn}>
-        <Text style={styles.zoomBtnText}>+</Text>
-      </Pressable>
-    </View>
+  const pinch = useMemo(() =>
+    Gesture.Pinch()
+      .onTouchesDown((e) => {
+        if (e.numberOfTouches >= 2) {
+          // Detect axis from finger positions
+          const t = e.allTouches;
+          const dx = Math.abs(t[0].x - t[1].x);
+          const dy = Math.abs(t[0].y - t[1].y);
+          axis.current = dx > dy ? 'h' : 'v';
+          scrollEnabled.current = false;
+        }
+      })
+      .onStart(() => {
+        startH.current = rollZoomH;
+        startV.current = rollZoomV;
+      })
+      .onUpdate((e) => {
+        if (axis.current === 'h') {
+          const z = Math.max(DIMENSIONS.rollZoomMin, Math.min(DIMENSIONS.rollZoomMax, startH.current * e.scale));
+          updateState(s => { s.ui.rollZoom = Math.round(z * 100) / 100; });
+        } else {
+          const z = Math.max(DIMENSIONS.rollZoomMin, Math.min(DIMENSIONS.rollZoomMax, startV.current * e.scale));
+          updateState(s => { s.ui.rollZoomV = Math.round(z * 100) / 100; });
+        }
+      })
+      .onEnd(() => {
+        axis.current = null;
+        scrollEnabled.current = true;
+      })
+      .runOnJS(true),
+    [rollZoomH, rollZoomV]
   );
+
+  return { pinch, scrollEnabled };
 }
 
 // ── Scroll position preservation hook ────────────────────────
@@ -110,20 +128,22 @@ function DrumGrid({ shape, color }) {
   const { width: screenWidth } = useWindowDimensions();
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
+  const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
+  const { pinch } = usePianoZoom();
   const { outerRef, innerRef, onOuterScroll, onInnerScroll } = useScrollPreserver(shape.id);
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
 
   const cellW = Math.max(44, Math.round(Math.floor((screenWidth - 70) / totalCols) * rollZoom));
-  const cellH = Math.round(48 * rollZoom);
-  const headerH = Math.round(36 * rollZoom);
+  const cellH = Math.round(48 * rollZoomV);
+  const headerH = Math.round(36 * rollZoomV);
 
   const slotLabels = DRUM_SLOTS || ['Kick', 'Snare', 'HiHat', 'Perc'];
 
   // Fix #3: bounds-check activeSceneIndex
   function toggleSlot(vi, si, slotIdx) {
     updateState(s => {
-      const scene = safeActiveScene(s);
+      const scene = safePanelScene(s);
       if (!scene) return;
       const sh = scene.shapes.find(ss => ss.id === shape.id);
       if (!sh || !sh.vertices[vi]) return;
@@ -145,8 +165,8 @@ function DrumGrid({ shape, color }) {
   }
 
   return (
+    <GestureDetector gesture={pinch}>
     <View style={{ flex: 1 }}>
-    <ZoomControls />
     <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
       <ScrollView ref={innerRef} horizontal style={styles.innerScroll} nestedScrollEnabled onScroll={onInnerScroll} scrollEventThrottle={16}>
         <View>
@@ -219,6 +239,7 @@ function DrumGrid({ shape, color }) {
       </ScrollView>
     </ScrollView>
     </View>
+    </GestureDetector>
   );
 }
 
@@ -232,6 +253,8 @@ function MelodicGrid({ shape, color }) {
   const scale = useStore(s => s.scale);
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
+  const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
+  const { pinch } = usePianoZoom();
   const { outerRef, innerRef, onOuterScroll: baseOuterScroll, onInnerScroll, pos } = useScrollPreserver(shape.id);
 
   const sub = shape.subdivision || 1;
@@ -241,7 +264,7 @@ function MelodicGrid({ shape, color }) {
   const availableWidth = screenWidth - labelW;
   const baseCellW = Math.max(40, Math.floor(availableWidth / totalCols));
   const cellW = Math.round(baseCellW * rollZoom);
-  const cellH = Math.round(40 * rollZoom);
+  const cellH = Math.round(28 * rollZoomV);
   const headerH = Math.round(44 * rollZoom);
 
   const rows = useMemo(() => buildRows(scale, shape), [scale, shape]);
@@ -298,7 +321,7 @@ function MelodicGrid({ shape, color }) {
   // Fix #3: bounds-check activeSceneIndex in every updateState callback
   function toggleMute(vi, si) {
     updateState(s => {
-      const scene = safeActiveScene(s);
+      const scene = safePanelScene(s);
       if (!scene) return;
       const sh = scene.shapes.find(ss => ss.id === shape.id);
       if (!sh || !sh.vertices[vi]) return;
@@ -308,8 +331,8 @@ function MelodicGrid({ shape, color }) {
   }
 
   return (
+    <GestureDetector gesture={pinch}>
     <View style={{ flex: 1 }}>
-    <ZoomControls />
     <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
       <ScrollView
         ref={innerRef}
@@ -417,6 +440,7 @@ function MelodicGrid({ shape, color }) {
         </ScrollView>
       </ScrollView>
     </View>
+    </GestureDetector>
   );
 }
 
@@ -465,23 +489,4 @@ const styles = StyleSheet.create({
   },
   drumCellSelected: { backgroundColor: 'rgba(0,0,0,0.03)' },
   drumDot: { width: 24, height: 24, borderRadius: 12 },
-  // Zoom controls
-  zoomControls: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    gap: 6,
-    backgroundColor: COLORS.panelBg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
-  },
-  zoomBtn: {
-    width: 24, height: 24, borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.06)',
-    justifyContent: 'center', alignItems: 'center',
-  },
-  zoomBtnText: { fontSize: 14, fontWeight: '600', color: COLORS.text },
-  zoomLabel: { fontSize: 10, fontWeight: '500', color: COLORS.textDim, width: 32, textAlign: 'center' },
 });

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useSharedValue } from 'react-native-reanimated';
-import { isAudioInitialized, getTransportSeconds, getCycleDuration } from '../audio/audioEngine.js';
+import { isAudioInitialized, getTransportSeconds, getElapsedSeconds, getCycleDuration } from '../audio/audioEngine.js';
 import { updateSequencer } from '../sequencer.js';
 
 // Drives the clock angle from audio transport time.
@@ -21,7 +21,9 @@ export function useClockSync() {
       if (cd > 0) {
         const angle = (t / cd) * Math.PI * 2 - Math.PI / 2;
         clockAngle.value = angle;
-        const cycleNumber = Math.floor(t / cd);
+        // Use raw elapsed time for cycle counting (t is already wrapped by getLoopPosition)
+        const elapsed = getElapsedSeconds();
+        const cycleNumber = Math.floor(elapsed / cd);
         updateSequencer(angle, cycleNumber);
       }
     }

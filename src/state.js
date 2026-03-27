@@ -51,6 +51,7 @@ function createDefaultState() {
       selectedNotes: [],
       canvasZoom: 1.0,
       rollZoom: 1.0,
+      rollZoomV: 1.0,
       clockAngle: -Math.PI / 2,
       mixerOpen: false,
       audioStarted: false,
@@ -181,14 +182,22 @@ function getShapeById(id) {
   return getShapes().find(s => s.id === id);
 }
 
-// Fix #3: Safe active scene accessor for use inside updateState callbacks.
-// Clamps activeSceneIndex to valid range before accessing. Returns null if no scenes.
+// Safe active scene accessor (for audio engine — reads activeSceneIndex)
 function safeActiveScene(s) {
   if (!s.scenes || s.scenes.length === 0) return null;
   if (s.activeSceneIndex < 0 || s.activeSceneIndex >= s.scenes.length) {
     s.activeSceneIndex = Math.max(0, s.scenes.length - 1);
   }
   return s.scenes[s.activeSceneIndex];
+}
+
+// Safe panel scene accessor (for UI mutations — reads panelSceneIndex)
+// This is the scene the user is currently EDITING in the piano roll.
+function safePanelScene(s) {
+  if (!s.scenes || s.scenes.length === 0) return null;
+  const idx = s.ui ? s.ui.panelSceneIndex : 0;
+  if (idx < 0 || idx >= s.scenes.length) return s.scenes[0] || null;
+  return s.scenes[idx];
 }
 
 let shapeIdCounter = 0;
@@ -358,6 +367,7 @@ export {
   getShapes,
   getShapeById,
   safeActiveScene,
+  safePanelScene,
   clearListeners,
   generateShapeId,
   captureScene,
