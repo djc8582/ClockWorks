@@ -61,7 +61,16 @@ function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
   const shapes = getShapes();
   const radii = calculateRingRadii(shapes.length, maxRadius, minRadius);
 
-  // Hit test vertices
+  // Ghost ring checked FIRST — always accessible even when crowded with shapes
+  if (hitTestGhostRing(x, y, shapes.length, radii, maxRadius, centerX, centerY)) {
+    updateState(s => {
+      s.ui.addPanelOpen = true;
+      s.ui.addPanelSides = getNextSideCount(shapes);
+    });
+    return;
+  }
+
+  // Then hit test vertices
   const hit = hitTest(x, y, shapes, radii, centerX, centerY);
   if (hit) {
     updateState(s => {
@@ -69,15 +78,6 @@ function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
       s.ui.panelSceneIndex = s.activeSceneIndex;
       s.ui.selectedNodeIndex = hit.vertexIndex;
       s.ui.selectedNotes = [];
-    });
-    return;
-  }
-
-  // Ghost ring
-  if (hitTestGhostRing(x, y, shapes.length, radii, maxRadius, centerX, centerY)) {
-    updateState(s => {
-      s.ui.addPanelOpen = true;
-      s.ui.addPanelSides = getNextSideCount(shapes);
     });
     return;
   }

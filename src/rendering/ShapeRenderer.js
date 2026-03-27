@@ -19,16 +19,18 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
   radius,
   centerX,
   centerY,
-  scale,
+  zoom,
   opacity,
   isPanelShape,
   selectedNodeIndex,
 }) {
   const color = COLORS.shapes[shape.colorIndex % COLORS.shapes.length];
+  // Clamp zoom factor for node sizing — never too big, scales down when zoomed out
+  const nodeSizeScale = Math.min(1.4, Math.max(0.4, Math.sqrt(zoom || 1)));
 
   const vertices = useMemo(
-    () => getVertexPositions(shape.sides, centerX, centerY, radius * scale),
-    [shape.sides, centerX, centerY, radius, scale]
+    () => getVertexPositions(shape.sides, centerX, centerY, radius),
+    [shape.sides, centerX, centerY, radius]
   );
 
   const polygonPath = useMemo(
@@ -36,36 +38,36 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
     [vertices]
   );
 
-  // Memoize stem endpoints + vec objects to avoid recreating every render
   const stemData = useMemo(() => {
     return shape.vertices.map((v, i) => {
       const pos = vertices[i];
       if (!pos || v.muted) return null;
       const mainPitch = v.pitches ? v.pitches[0] : 60;
       const stemEnd = getStemEndpoint(pos.x, pos.y, centerX, centerY, mainPitch);
+      const baseRadius = DIMENSIONS.vertexMinRadius +
+        ((v.velocity || 85) / 127) * (DIMENSIONS.vertexMaxRadius - DIMENSIONS.vertexMinRadius);
       return {
         p1: vec(pos.x, pos.y),
         p2: vec(stemEnd.x, stemEnd.y),
-        dotRadius: DIMENSIONS.vertexMinRadius +
-          ((v.velocity || 85) / 127) * (DIMENSIONS.vertexMaxRadius - DIMENSIONS.vertexMinRadius),
+        dotRadius: baseRadius * nodeSizeScale,
       };
     });
-  }, [shape.vertices, vertices, centerX, centerY]);
+  }, [shape.vertices, vertices, centerX, centerY, nodeSizeScale]);
 
   if (vertices.length === 0) return null;
 
   const ringColor = isPanelShape ? color.main + '30' : color.main + '18';
-  const ringWidth = 1.5;
+  const strokeScale = nodeSizeScale;
 
   return (
     <Group opacity={opacity}>
       <Circle
         cx={centerX}
         cy={centerY}
-        r={radius * scale}
+        r={radius}
         color={ringColor}
         style="stroke"
-        strokeWidth={ringWidth}
+        strokeWidth={1.5 * strokeScale}
       />
 
       <Path path={polygonPath} color={color.fill} style="fill" />
@@ -73,7 +75,7 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
         path={polygonPath}
         color={color.main}
         style="stroke"
-        strokeWidth={DIMENSIONS.edgeWidth}
+        strokeWidth={DIMENSIONS.edgeWidth * strokeScale}
         strokeJoin="round"
         strokeCap="round"
       />
@@ -88,10 +90,10 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
               key={`m-${i}`}
               cx={pos.x}
               cy={pos.y}
-              r={DIMENSIONS.mutedVertexRadius}
+              r={DIMENSIONS.mutedVertexRadius * nodeSizeScale}
               color={COLORS.muted}
               style="stroke"
-              strokeWidth={2}
+              strokeWidth={2 * strokeScale}
             />
           );
         }
@@ -107,7 +109,7 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
               p2={stem.p2}
               color={color.dim}
               style="stroke"
-              strokeWidth={DIMENSIONS.stemWidth}
+              strokeWidth={DIMENSIONS.stemWidth * strokeScale}
               strokeCap="round"
             />
 
@@ -115,10 +117,10 @@ const ShapeRenderer = React.memo(function ShapeRenderer({
               <Circle
                 cx={pos.x}
                 cy={pos.y}
-                r={stem.dotRadius + (isSelectedNode ? 8 : 5)}
+                r={stem.dotRadius + (isSelectedNode ? 6 : 4) * nodeSizeScale}
                 color={isSelectedNode ? color.main : color.glow}
                 style="stroke"
-                strokeWidth={isSelectedNode ? 2.5 : 1.5}
+                strokeWidth={(isSelectedNode ? 2.5 : 1.5) * strokeScale}
               />
             )}
 

@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { View, StyleSheet, StatusBar, Pressable, Text, useWindowDimensions, Animated, Easing } from 'react-native';
+import { View, StyleSheet, StatusBar, Pressable, Text, Modal, useWindowDimensions, Animated, Easing } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { initState, updateState, clearListeners } from './src/state.js';
-import { initSequencer } from './src/sequencer.js';
+import { initSequencer, rebuildPlaybackOrder } from './src/sequencer.js';
 import { useStore } from './src/hooks/useStore.js';
 import { COLORS } from './src/constants.js';
 import { addNewShape } from './src/gestures/canvasGestures.js';
@@ -12,7 +12,7 @@ import { preloadAssets } from './src/audio/timbres.js';
 import { initAudio } from './src/audio/audioEngine.js';
 
 import CanvasView from './src/rendering/CanvasView.js';
-import { TopBar, TempoBar } from './src/ui/TopBar.js';
+import TopBar from './src/ui/TopBar.js';
 import SceneStrip from './src/ui/SceneStrip.js';
 import PanelHeader from './src/ui/PanelHeader.js';
 import TimbreRow from './src/ui/TimbreRow.js';
@@ -22,6 +22,7 @@ import Mixer from './src/ui/Mixer.js';
 // Initialize state on module load
 initState();
 initSequencer();
+rebuildPlaybackOrder();
 
 // ── Loading screen ──────────────────────────────────────────
 // Mirrors the app's actual canvas aesthetic — concentric colored rings
@@ -202,32 +203,31 @@ function AppContent() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <StatusBar barStyle="dark-content" />
 
-      {/* Top bar: BPM + mixer toggle */}
+      {/* Top bar */}
       <TopBar />
 
-      {/* Mixer — shown/hidden without unmounting */}
-      {mixerOpen && <Mixer />}
+      {/* Canvas area */}
+      <CanvasView onLayout={onCanvasLayout} />
 
-      {/* Normal view — hidden when mixer is open, stays mounted */}
-      <View style={mixerOpen ? styles.hidden : { flex: 1 }}>
-        {/* Canvas area */}
-        <CanvasView onLayout={onCanvasLayout} />
+      {/* Scene strip */}
+      <SceneStrip />
 
-        {/* Tempo + Scene strip */}
-        <TempoBar />
-        <SceneStrip />
-
-        {/* Bottom panel: piano roll */}
-        <View style={[styles.bottomPanel, { height: panelHeight, paddingBottom: insets.bottom }]}>
-          {/* Drag handle */}
-          <View style={styles.dragHandle}>
-            <View style={styles.dragBar} />
-          </View>
-          <PanelHeader shape={panelShape} color={panelColor} />
-          <TimbreRow shape={panelShape} color={panelColor} />
-          <PianoRoll shape={panelShape} color={panelColor} />
-        </View>
+      {/* Bottom panel: piano roll */}
+      <View style={[styles.bottomPanel, { height: panelHeight, paddingBottom: insets.bottom }]}>
+        <PanelHeader shape={panelShape} color={panelColor} />
+        <TimbreRow shape={panelShape} color={panelColor} />
+        <PianoRoll shape={panelShape} color={panelColor} />
       </View>
+
+      {/* Mixer modal — centered like other modals */}
+      <Modal visible={mixerOpen} transparent animationType="fade" onRequestClose={() => updateState(s => { s.ui.mixerOpen = false; })}>
+        <Pressable style={styles.mixerBackdrop} onPress={() => updateState(s => { s.ui.mixerOpen = false; })}>
+          <View style={styles.mixerModal} onStartShouldSetResponder={() => true}>
+            <Text style={styles.mixerTitle}>Mixer</Text>
+            <Mixer />
+          </View>
+        </Pressable>
+      </Modal>
 
       {/* Add shape panel overlay */}
       {addPanelOpen && (
@@ -414,5 +414,27 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     color: '#fff',
+  },
+  // Mixer modal
+  mixerBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  mixerModal: {
+    width: 300,
+    maxHeight: '70%',
+    backgroundColor: COLORS.panelBg,
+    borderRadius: 20,
+    padding: 16,
+    overflow: 'hidden',
+  },
+  mixerTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: COLORS.text,
+    textAlign: 'center',
+    marginBottom: 12,
   },
 });

@@ -1,6 +1,5 @@
 import React, { useMemo, useRef, useCallback, useEffect, useState } from 'react';
 import { View, ScrollView, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
-import { GestureDetector, Gesture } from 'react-native-gesture-handler';
 import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS, DIMENSIONS } from '../constants.js';
 import { updateState, safeActiveScene } from '../state.js';
 import { useStore } from '../hooks/useStore.js';
@@ -40,28 +39,32 @@ export default function PianoRoll({ shape, color }) {
   return <MelodicGrid shape={shape} color={color} />;
 }
 
-// ── Pinch-to-zoom hook ───────────────────────────────────────
-function usePianoRollPinch() {
+// ── Zoom controls ────────────────────────────────────────────
+function ZoomControls() {
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
-  const startZoomRef = useRef(1);
 
-  const pinch = useMemo(() =>
-    Gesture.Pinch()
-      .runOnJS(true)
-      .onStart(() => {
-        startZoomRef.current = rollZoom;
-      })
-      .onUpdate((e) => {
-        const newZoom = Math.max(
-          DIMENSIONS.rollZoomMin,
-          Math.min(DIMENSIONS.rollZoomMax, startZoomRef.current * e.scale)
-        );
-        updateState(s => { s.ui.rollZoom = Math.round(newZoom * 100) / 100; });
-      }),
-    [rollZoom]
+  function zoomIn() {
+    updateState(s => {
+      s.ui.rollZoom = Math.min(DIMENSIONS.rollZoomMax, (s.ui.rollZoom || 1) + 0.25);
+    });
+  }
+  function zoomOut() {
+    updateState(s => {
+      s.ui.rollZoom = Math.max(DIMENSIONS.rollZoomMin, (s.ui.rollZoom || 1) - 0.25);
+    });
+  }
+
+  return (
+    <View style={styles.zoomControls}>
+      <Pressable style={styles.zoomBtn} onPress={zoomOut}>
+        <Text style={styles.zoomBtnText}>{'\u2212'}</Text>
+      </Pressable>
+      <Text style={styles.zoomLabel}>{Math.round(rollZoom * 100)}%</Text>
+      <Pressable style={styles.zoomBtn} onPress={zoomIn}>
+        <Text style={styles.zoomBtnText}>+</Text>
+      </Pressable>
+    </View>
   );
-
-  return pinch;
 }
 
 // ── Scroll position preservation hook ────────────────────────
@@ -107,7 +110,6 @@ function DrumGrid({ shape, color }) {
   const { width: screenWidth } = useWindowDimensions();
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
-  const pinch = usePianoRollPinch();
   const { outerRef, innerRef, onOuterScroll, onInnerScroll } = useScrollPreserver(shape.id);
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
@@ -143,7 +145,8 @@ function DrumGrid({ shape, color }) {
   }
 
   return (
-    <GestureDetector gesture={pinch}>
+    <View style={{ flex: 1 }}>
+    <ZoomControls />
     <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
       <ScrollView ref={innerRef} horizontal style={styles.innerScroll} nestedScrollEnabled onScroll={onInnerScroll} scrollEventThrottle={16}>
         <View>
@@ -215,7 +218,7 @@ function DrumGrid({ shape, color }) {
         </View>
       </ScrollView>
     </ScrollView>
-    </GestureDetector>
+    </View>
   );
 }
 
@@ -229,7 +232,6 @@ function MelodicGrid({ shape, color }) {
   const scale = useStore(s => s.scale);
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
-  const pinch = usePianoRollPinch();
   const { outerRef, innerRef, onOuterScroll: baseOuterScroll, onInnerScroll, pos } = useScrollPreserver(shape.id);
 
   const sub = shape.subdivision || 1;
@@ -306,7 +308,8 @@ function MelodicGrid({ shape, color }) {
   }
 
   return (
-    <GestureDetector gesture={pinch}>
+    <View style={{ flex: 1 }}>
+    <ZoomControls />
     <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
       <ScrollView
         ref={innerRef}
@@ -413,7 +416,7 @@ function MelodicGrid({ shape, color }) {
           </View>
         </ScrollView>
       </ScrollView>
-    </GestureDetector>
+    </View>
   );
 }
 
@@ -462,4 +465,23 @@ const styles = StyleSheet.create({
   },
   drumCellSelected: { backgroundColor: 'rgba(0,0,0,0.03)' },
   drumDot: { width: 24, height: 24, borderRadius: 12 },
+  // Zoom controls
+  zoomControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    gap: 6,
+    backgroundColor: COLORS.panelBg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(0,0,0,0.06)',
+  },
+  zoomBtn: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    justifyContent: 'center', alignItems: 'center',
+  },
+  zoomBtnText: { fontSize: 14, fontWeight: '600', color: COLORS.text },
+  zoomLabel: { fontSize: 10, fontWeight: '500', color: COLORS.textDim, width: 32, textAlign: 'center' },
 });

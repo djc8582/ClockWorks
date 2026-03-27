@@ -102,7 +102,7 @@ export default React.memo(function CanvasView({ onLayout: onLayoutProp }) {
                 radius={radius}
                 centerX={centerX}
                 centerY={centerY}
-                scale={1}
+                zoom={canvasZoom}
                 opacity={opacity}
                 isPanelShape={isPanelShape}
                 selectedNodeIndex={selectedNodeIndex}

@@ -7,30 +7,38 @@ let pendingNotify = false;
 let notifyDepth = 0;        // Fix #4: recursion depth counter
 const MAX_NOTIFY_DEPTH = 3; // Fix #4: safety net
 
+function createDefaultScene() {
+  return {
+    shapes: [
+      {
+        id: "shape-" + Date.now() + "-" + Math.floor(Math.random() * 1e6),
+        sides: 3,
+        colorIndex: 0,
+        timbre: "epiano",
+        volume: 1.0,
+        subdivision: 1,
+        vertices: [
+          { pitches: [60], velocity: 100, muted: false, subs: [] },
+          { pitches: [64], velocity: 85, muted: false, subs: [] },
+          { pitches: [67], velocity: 90, muted: false, subs: [] },
+        ],
+      },
+    ],
+  };
+}
+
 function createDefaultState() {
+  // 8 scene slots — first has the default triangle, rest are empty
+  const scenes = [];
+  for (let i = 0; i < 8; i++) {
+    scenes.push(i === 0 ? createDefaultScene() : { shapes: [] });
+  }
   return {
     bpm: 120,
     scale: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
     activeSceneIndex: 0,
-    scenes: [
-      {
-        shapes: [
-          {
-            id: "shape-1",
-            sides: 3,
-            colorIndex: 0,
-            timbre: "epiano",
-            volume: 1.0,
-            subdivision: 1,
-            vertices: [
-              { pitches: [60], velocity: 100, muted: false, subs: [] },
-              { pitches: [64], velocity: 85, muted: false, subs: [] },
-              { pitches: [67], velocity: 90, muted: false, subs: [] },
-            ],
-          },
-        ],
-      },
-    ],
+    enabledSlots: [true, false, false, false, false, false, false, false],
+    scenes,
     effects: {
       reverbWet: 0.3,
       delayWet: 0,

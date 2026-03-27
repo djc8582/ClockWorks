@@ -481,4 +481,7 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, sta
   }
 }
 
-export { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices, preloadAssets };
+function getSampleBank() { return sampleBank; }
+function getDrumBank() { return drumBank; }
+
+export { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices, preloadAssets, getSampleBank, getDrumBank };
