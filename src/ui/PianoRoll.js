@@ -1,10 +1,12 @@
 import React, { useMemo, useRef, useCallback, useEffect, useState } from 'react';
-import { View, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
-import { ScrollView, Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { View, ScrollView, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedProps, runOnJS } from 'react-native-reanimated';
 import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS } from '../constants.js';
 
-const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
+// Use Reanimated's Animated.ScrollView (wraps RN's ScrollView, NOT RNGH's).
+// RNGH's ScrollView has a pre-applied NativeViewGestureHandler that conflicts
+// with external pinch gestures (confirmed by maintainer in RNGH issue #3266).
 import { updateState, safePanelScene } from '../state.js';
 import { useStore } from '../hooks/useStore.js';
 import PianoRollCell from './PianoRollCell.js';
@@ -66,36 +68,31 @@ export default function PianoRoll({ shape, color }) {
   return <MelodicGrid shape={shape} color={color} />;
 }
 
-// ── Pinch-to-zoom — ALL gesture callbacks run as worklets on UI thread ─
-// isPinching.value = true happens synchronously on UI thread, instantly
-// disabling ScrollView via animatedProps. No JS→UI race condition.
+// ── Pinch-to-zoom — worklet callbacks on UI thread ─────────
+// Key: ScrollView is from react-native (not RNGH), wrapped with Gesture.Native()
+// using simultaneousWithExternalGesture to coexist with the pinch gesture.
+// isPinching shared value disables scroll via animatedProps synchronously.
 function usePianoZoom(rollZoomH, rollZoomV) {
   const isPinching = useSharedValue(false);
-  const axis = useSharedValue(0); // 0=none, 1=horizontal, 2=vertical
+  const axis = useSharedValue(0);
   const startZoomH = useSharedValue(1);
   const startZoomV = useSharedValue(1);
   const currentZoomH = useSharedValue(rollZoomH);
   const currentZoomV = useSharedValue(rollZoomV);
 
-  // Keep shared values in sync with React state
   useEffect(() => { currentZoomH.value = rollZoomH; }, [rollZoomH]);
   useEffect(() => { currentZoomV.value = rollZoomV; }, [rollZoomV]);
 
-  // Persist zoom to app state (runs on JS thread, ok if slightly delayed)
   function persistZoom(h, v) {
-    updateState(s => {
-      s.ui.rollZoom = h;
-      s.ui.rollZoomV = v;
-    });
+    updateState(s => { s.ui.rollZoom = h; s.ui.rollZoomV = v; });
   }
 
   const pinch = useMemo(() =>
     Gesture.Pinch()
-      // NO .runOnJS(true) — callbacks are worklets running on UI thread
       .onTouchesDown((e) => {
         'worklet';
         if (e.numberOfTouches >= 2) {
-          isPinching.value = true; // UI thread — instant scroll disable
+          isPinching.value = true;
           const t = e.allTouches;
           const dx = Math.abs(t[0].x - t[1].x);
           const dy = Math.abs(t[0].y - t[1].y);
@@ -117,21 +114,16 @@ function usePianoZoom(rollZoomH, rollZoomV) {
           const z = Math.min(3.0, Math.max(0.6, startZoomV.value * dampened));
           currentZoomV.value = Math.round(z * 100) / 100;
         }
-        // Persist to app state on JS thread (slightly delayed — fine for state)
         runOnJS(persistZoom)(currentZoomH.value, currentZoomV.value);
       })
-      .onEnd(() => {
-        'worklet';
-        isPinching.value = false;
-        axis.value = 0;
-      })
-      .onFinalize(() => {
-        'worklet';
-        isPinching.value = false;
-        axis.value = 0;
-      }),
+      .onEnd(() => { 'worklet'; isPinching.value = false; axis.value = 0; })
+      .onFinalize(() => { 'worklet'; isPinching.value = false; axis.value = 0; }),
     []
   );
+
+  // Gesture.Native() wrappers tell native gesture system about scroll↔pinch relationship
+  const nativeOuter = useMemo(() => Gesture.Native().simultaneousWithExternalGesture(pinch), [pinch]);
+  const nativeInner = useMemo(() => Gesture.Native().simultaneousWithExternalGesture(pinch), [pinch]);
 
   const outerAnimatedProps = useAnimatedProps(() => ({
     scrollEnabled: !isPinching.value,
@@ -140,7 +132,7 @@ function usePianoZoom(rollZoomH, rollZoomV) {
     scrollEnabled: !isPinching.value,
   }));
 
-  return { pinch, outerAnimatedProps, innerAnimatedProps };
+  return { pinch, nativeOuter, nativeInner, outerAnimatedProps, innerAnimatedProps };
 }
 
 // ── Scroll helpers ───────────────────────────────────────────
@@ -187,7 +179,7 @@ function DrumGrid({ shape, color }) {
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
   const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
-  const { pinch, outerAnimatedProps, innerAnimatedProps } = usePianoZoom(rollZoom, rollZoomV);
+  const { pinch, nativeOuter, nativeInner, outerAnimatedProps, innerAnimatedProps } = usePianoZoom(rollZoom, rollZoomV);
   const { outerRef, innerRef, onOuterScroll, onInnerScroll, onInnerDragStart, onInnerDragEnd, onInnerMomentumEnd, outerEnabled } = useNestedScroll(shape.id);
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
@@ -222,17 +214,18 @@ function DrumGrid({ shape, color }) {
   return (
     <GestureDetector gesture={pinch}>
     <View style={{ flex: 1 }}>
-    <AnimatedScrollView
+    <GestureDetector gesture={nativeOuter}>
+    <Animated.ScrollView
       ref={outerRef}
       style={styles.outerScroll}
       nestedScrollEnabled
       directionalLockEnabled
-      waitFor={innerRef}
       animatedProps={outerAnimatedProps}
       onScroll={onOuterScroll}
       scrollEventThrottle={16}
     >
-      <AnimatedScrollView
+      <GestureDetector gesture={nativeInner}>
+      <Animated.ScrollView
         ref={innerRef}
         horizontal
         style={styles.innerScroll}
@@ -240,9 +233,6 @@ function DrumGrid({ shape, color }) {
         directionalLockEnabled
         animatedProps={innerAnimatedProps}
         onScroll={onInnerScroll}
-        onScrollBeginDrag={onInnerDragStart}
-        onScrollEndDrag={onInnerDragEnd}
-        onMomentumScrollEnd={onInnerMomentumEnd}
         scrollEventThrottle={16}
       >
         <View>
@@ -284,8 +274,10 @@ function DrumGrid({ shape, color }) {
             );
           })}
         </View>
-      </AnimatedScrollView>
-    </AnimatedScrollView>
+      </Animated.ScrollView>
+      </GestureDetector>
+    </Animated.ScrollView>
+    </GestureDetector>
     </View>
     </GestureDetector>
   );
@@ -300,7 +292,7 @@ function MelodicGrid({ shape, color }) {
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
   const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
-  const { pinch, outerAnimatedProps, innerAnimatedProps } = usePianoZoom(rollZoom, rollZoomV);
+  const { pinch, nativeOuter, nativeInner, outerAnimatedProps, innerAnimatedProps } = usePianoZoom(rollZoom, rollZoomV);
   const { outerRef, innerRef, onOuterScroll: baseOuterScroll, onInnerScroll, onInnerDragStart, onInnerDragEnd, onInnerMomentumEnd, outerEnabled, pos } = useNestedScroll(shape.id);
 
   const sub = shape.subdivision || 1;
@@ -372,17 +364,18 @@ function MelodicGrid({ shape, color }) {
   return (
     <GestureDetector gesture={pinch}>
     <View style={{ flex: 1 }}>
-    <AnimatedScrollView
+    <GestureDetector gesture={nativeOuter}>
+    <Animated.ScrollView
       ref={outerRef}
       style={styles.outerScroll}
       nestedScrollEnabled
       directionalLockEnabled
-      waitFor={innerRef}
       animatedProps={outerAnimatedProps}
       onScroll={onOuterScroll}
       scrollEventThrottle={16}
     >
-      <AnimatedScrollView
+      <GestureDetector gesture={nativeInner}>
+      <Animated.ScrollView
         ref={innerRef}
         horizontal
         style={styles.innerScroll}
@@ -390,9 +383,6 @@ function MelodicGrid({ shape, color }) {
         directionalLockEnabled
         animatedProps={innerAnimatedProps}
         onScroll={onInnerScroll}
-        onScrollBeginDrag={onInnerDragStart}
-        onScrollEndDrag={onInnerDragEnd}
-        onMomentumScrollEnd={onInnerMomentumEnd}
         scrollEventThrottle={16}
       >
           <View>
@@ -449,8 +439,10 @@ function MelodicGrid({ shape, color }) {
             })}
             {bottomSpacer > 0 && <View style={{ height: bottomSpacer }} />}
           </View>
-        </AnimatedScrollView>
-      </AnimatedScrollView>
+        </Animated.ScrollView>
+        </GestureDetector>
+      </Animated.ScrollView>
+      </GestureDetector>
     </View>
     </GestureDetector>
   );
