@@ -35,9 +35,9 @@ export default React.memo(function PianoRollCell({
     const stepData = getStepData(shape.vertices[vertexIndex], stepIndex);
     if (!stepData) return;
     const pitches = stepData.pitches || [];
-    const hasPitch = pitches.includes(pitch);
+    // Tolerance-based matching for fractional (microtonal) pitches
+    const hasPitch = pitches.some(p => Math.abs(p - pitch) < 0.01);
 
-    // Fix #3: bounds-check activeSceneIndex in every updateState callback
     if (hasPitch && !stepData.muted) {
       updateState(s => {
         const scene = safePanelScene(s);
@@ -47,7 +47,7 @@ export default React.memo(function PianoRollCell({
         const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : (sh.vertices[vertexIndex].subs && sh.vertices[vertexIndex].subs[stepIndex - 1]);
         if (!sd || !sd.pitches) return;
         if (sd.pitches.length > 1) {
-          sd.pitches = sd.pitches.filter(p => p !== pitch);
+          sd.pitches = sd.pitches.filter(p => Math.abs(p - pitch) > 0.01);
         } else {
           sd.pitches = [];
           sd.muted = true;

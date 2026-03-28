@@ -66,46 +66,71 @@ export default function PianoRoll({ shape, color }) {
   return <MelodicGrid shape={shape} color={color} />;
 }
 
-// ── Pinch-to-zoom with Reanimated shared value for instant scroll disable ─
+// ── Pinch-to-zoom — ALL gesture callbacks run as worklets on UI thread ─
+// isPinching.value = true happens synchronously on UI thread, instantly
+// disabling ScrollView via animatedProps. No JS→UI race condition.
 function usePianoZoom(rollZoomH, rollZoomV) {
   const isPinching = useSharedValue(false);
-  const axisRef = useRef(null);
-  const startH = useRef(1);
-  const startV = useRef(1);
-  const lastUpdate = useRef(0);
+  const axis = useSharedValue(0); // 0=none, 1=horizontal, 2=vertical
+  const startZoomH = useSharedValue(1);
+  const startZoomV = useSharedValue(1);
+  const currentZoomH = useSharedValue(rollZoomH);
+  const currentZoomV = useSharedValue(rollZoomV);
+
+  // Keep shared values in sync with React state
+  useEffect(() => { currentZoomH.value = rollZoomH; }, [rollZoomH]);
+  useEffect(() => { currentZoomV.value = rollZoomV; }, [rollZoomV]);
+
+  // Persist zoom to app state (runs on JS thread, ok if slightly delayed)
+  function persistZoom(h, v) {
+    updateState(s => {
+      s.ui.rollZoom = h;
+      s.ui.rollZoomV = v;
+    });
+  }
 
   const pinch = useMemo(() =>
     Gesture.Pinch()
-      .runOnJS(true)
+      // NO .runOnJS(true) — callbacks are worklets running on UI thread
       .onTouchesDown((e) => {
+        'worklet';
         if (e.numberOfTouches >= 2) {
+          isPinching.value = true; // UI thread — instant scroll disable
           const t = e.allTouches;
           const dx = Math.abs(t[0].x - t[1].x);
           const dy = Math.abs(t[0].y - t[1].y);
-          axisRef.current = dx > dy ? 'h' : 'v';
-          isPinching.value = true; // Shared value — disables scroll on UI thread instantly
+          axis.value = dx > dy ? 1 : 2;
         }
       })
       .onStart(() => {
-        startH.current = rollZoomH;
-        startV.current = rollZoomV;
+        'worklet';
+        startZoomH.value = currentZoomH.value;
+        startZoomV.value = currentZoomV.value;
       })
       .onUpdate((e) => {
-        const now = Date.now();
-        if (now - lastUpdate.current < 50) return;
-        lastUpdate.current = now;
+        'worklet';
         const dampened = Math.pow(e.scale, 0.5);
-        if (axisRef.current === 'h') {
-          const z = Math.max(1.0, Math.min(4.0, startH.current * dampened));
-          updateState(s => { s.ui.rollZoom = Math.round(z * 100) / 100; });
-        } else {
-          const z = Math.max(0.6, Math.min(3.0, startV.current * dampened));
-          updateState(s => { s.ui.rollZoomV = Math.round(z * 100) / 100; });
+        if (axis.value === 1) {
+          const z = Math.min(4.0, Math.max(1.0, startZoomH.value * dampened));
+          currentZoomH.value = Math.round(z * 100) / 100;
+        } else if (axis.value === 2) {
+          const z = Math.min(3.0, Math.max(0.6, startZoomV.value * dampened));
+          currentZoomV.value = Math.round(z * 100) / 100;
         }
+        // Persist to app state on JS thread (slightly delayed — fine for state)
+        runOnJS(persistZoom)(currentZoomH.value, currentZoomV.value);
       })
-      .onEnd(() => { isPinching.value = false; })
-      .onFinalize(() => { isPinching.value = false; }),
-    [rollZoomH, rollZoomV]
+      .onEnd(() => {
+        'worklet';
+        isPinching.value = false;
+        axis.value = 0;
+      })
+      .onFinalize(() => {
+        'worklet';
+        isPinching.value = false;
+        axis.value = 0;
+      }),
+    []
   );
 
   const outerAnimatedProps = useAnimatedProps(() => ({
@@ -408,8 +433,9 @@ function MelodicGrid({ shape, color }) {
                     Array.from({ length: sub }).map((_, s) => {
                       const stepData = getStepData(shape.vertices[vi], s);
                       const pitches = stepData ? (stepData.pitches || []) : [];
-                      const isActive = pitches.includes(pitch) && !stepData?.muted;
-                      const isMuted = pitches.includes(pitch) && stepData?.muted;
+                      const hasPitch = pitches.some(p => Math.abs(p - pitch) < 0.01);
+                      const isActive = hasPitch && !stepData?.muted;
+                      const isMuted = hasPitch && stepData?.muted;
                       const vel = stepData ? stepData.velocity : 0;
                       const sel = vi === selectedNode;
                       const isFirst = s === 0;

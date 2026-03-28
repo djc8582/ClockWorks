@@ -178,10 +178,10 @@ export const SCALE_DEFINITIONS = {
   "Octaves": [0],
   "Chromatic": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
   // Harmonic series (true overtone ratios as fractional semitones)
-  "Harm 1-8": [0, 3.86, 7.02, 9.69],                     // unique PCs from harmonics 1-8
+  "Harm 1-8": [0, 7.02, 3.86, 2.04, 9.69, 8.84],          // harmonics 1-8 unique PCs
   "Harm 1-16": [0, 2.04, 3.86, 5.51, 7.02, 8.41, 9.69, 10.88],
   "Harm Odd": [0, 7.02, 3.86, 9.69, 2.04, 5.51],         // odd harmonics 1,3,5,7,9,11
-  "Harm 7th": [0, 3.86, 7.02, 9.69],                      // natural 7th chord from series
+  "Harm 7th": [0, 3.86, 7.02, 9.69],                      // natural 7th from series
   "Overtone": [0, 2, 4, 6, 7, 9, 10],                     // Lydian dominant (12-TET approx)
   // Microtonal — true quarter tones and equal divisions
   "Quarter 24": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5],
