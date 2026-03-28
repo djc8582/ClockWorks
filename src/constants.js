@@ -177,19 +177,29 @@ export const SCALE_DEFINITIONS = {
   "Fifths": [0, 7],
   "Octaves": [0],
   "Chromatic": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-  // Harmonic series (approximated to 12-TET)
-  "Harm 1-8": [0, 12, 7, 5, 4, 3, 2, 10],  // harmonics 1-8 mapped
-  "Harm Odd": [0, 7, 4, 11, 2, 9],           // odd harmonics 1,3,5,7,9,11
-  "Harm 7th": [0, 4, 7, 10],                   // natural 7th chord from series
-  "Overtone": [0, 2, 4, 6, 7, 9, 10],         // Lydian dominant (overtone scale)
-  // Microtonal approximations (quartertone-adjacent in 12-TET)
-  "Quarter 6": [0, 1, 3, 5, 7, 9],           // 6-note quartertone approx
-  "Quarter 8": [0, 1, 3, 4, 6, 7, 9, 10],    // 8-note quartertone approx
-  "Slendro": [0, 2, 5, 7, 9],                 // Javanese 5-tone (closest 12-TET)
-  "Equi 5": [0, 2, 5, 7, 10],                 // 5-TET approximation
-  "Equi 6": [0, 2, 4, 6, 8, 10],             // 6-TET = whole tone
-  "Equi 7": [0, 2, 3, 5, 7, 9, 10],          // 7-TET approximation
-  "Equi 8": [0, 2, 3, 5, 6, 8, 9, 11],       // 8-TET approximation
+  // Harmonic series (true overtone ratios as fractional semitones)
+  "Harm 1-8": [0, 3.86, 7.02, 9.69],                     // unique PCs from harmonics 1-8
+  "Harm 1-16": [0, 2.04, 3.86, 5.51, 7.02, 8.41, 9.69, 10.88],
+  "Harm Odd": [0, 7.02, 3.86, 9.69, 2.04, 5.51],         // odd harmonics 1,3,5,7,9,11
+  "Harm 7th": [0, 3.86, 7.02, 9.69],                      // natural 7th chord from series
+  "Overtone": [0, 2, 4, 6, 7, 9, 10],                     // Lydian dominant (12-TET approx)
+  // Microtonal — true quarter tones and equal divisions
+  "Quarter 24": [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5],
+  "Quarter 6": [0, 1.5, 3, 5, 7, 9],
+  "Quarter 8": [0, 1.5, 3, 4.5, 6, 7, 9, 10.5],
+  // Maqam scales (true neutral intervals)
+  "Maqam Bayati": [0, 1.5, 3, 5, 7, 8, 10],
+  "Maqam Rast": [0, 2, 3.5, 5, 7, 9, 10.5],
+  "Maqam Saba": [0, 1.5, 3, 4, 5, 8, 10],
+  "Maqam Sikah": [0, 1.5, 3.5, 5.5, 7, 8.5, 10.5],
+  // Gamelan (true intervals, not 12-TET approximations)
+  "Slendro": [0, 2.4, 4.8, 7.2, 9.6],
+  "Pelog": [0, 1.2, 2.8, 5, 7, 7.8, 10.2],
+  // Equal temperament divisions
+  "Equi 5": [0, 2.4, 4.8, 7.2, 9.6],
+  "Equi 6": [0, 2, 4, 6, 8, 10],
+  "Equi 7": [0, 1.71, 3.43, 5.14, 6.86, 8.57, 10.29],
+  "Equi 8": [0, 1.5, 3, 4.5, 6, 7.5, 9, 10.5],
   // African / Gamelan / Other world
   "Akebono": [0, 2, 3, 7, 8],
   "Yo": [0, 2, 5, 7, 9],
@@ -205,7 +215,7 @@ export const SCALE_DEFINITIONS = {
   "Messiaen 3": [0, 1, 2, 4, 5, 6, 8, 9, 10],
   "Messiaen 4": [0, 1, 2, 5, 6, 7, 8, 11],
   "Messiaen 5": [0, 1, 5, 6, 7, 11],
-  "Messiaen 6": [0, 1, 2, 4, 5, 6, 8, 9, 10],
+  "Messiaen 6": [0, 1, 2, 4, 6, 7, 8, 10],
   "Messiaen 7": [0, 1, 2, 3, 5, 6, 7, 8, 9, 11],
   // Chords as scales
   "Maj7": [0, 4, 7, 11],

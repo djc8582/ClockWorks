@@ -26,8 +26,9 @@ function snapPitchToScale(pitch) {
   const scale = state.scale;
   if (scale.length === 12) return pitch; // chromatic, no snapping
 
-  const pitchClass = ((pitch % 12) + 12) % 12;
-  if (scale.includes(pitchClass)) return pitch;
+  const pitchClass = Math.round(((pitch % 12) + 12) % 12 * 100) / 100;
+  // Check with tolerance for fractional pitch classes
+  if (scale.some(pc => Math.abs(pc - pitchClass) < 0.01)) return pitch;
 
   // Find nearest active pitch class
   let minDist = 12;
@@ -101,7 +102,12 @@ function detectScale() {
 function setScalePreset(name, root) {
   const intervals = SCALE_DEFINITIONS[name];
   if (!intervals) return;
-  const scale = intervals.map(i => (i + root) % 12).sort((a, b) => a - b);
+  // Support fractional pitch classes — don't round
+  const scale = [...new Set(intervals.map(i => {
+    const pc = (i + root) % 12;
+    return Math.round(pc * 100) / 100; // 2 decimal precision, avoid float drift
+  }))].sort((a, b) => a - b);
+  if (scale.length === 0) return;
   updateState(s => { s.scale = scale; });
   snapAllVerticesToScale();
   detectScale();

@@ -1,7 +1,10 @@
 import React, { useMemo, useRef, useCallback, useEffect, useState } from 'react';
 import { View, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
-import { ScrollView } from 'react-native-gesture-handler';
+import { ScrollView, Gesture, GestureDetector } from 'react-native-gesture-handler';
+import Animated, { useSharedValue, useAnimatedProps, runOnJS } from 'react-native-reanimated';
 import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS } from '../constants.js';
+
+const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
 import { updateState, safePanelScene } from '../state.js';
 import { useStore } from '../hooks/useStore.js';
 import PianoRollCell from './PianoRollCell.js';
@@ -12,11 +15,29 @@ function getStepData(vertex, stepIndex) {
 }
 
 function buildRows(scale, shape) {
-  const scaleSet = new Set(scale);
   const rowSet = new Set();
-  for (let p = PITCH.max; p >= PITCH.min; p--) {
-    if (scaleSet.has(p % 12)) rowSet.add(p);
+  // Check if scale has any fractional pitch classes (microtonal)
+  const hasFractional = scale.some(pc => pc !== Math.floor(pc));
+
+  if (hasFractional) {
+    // Microtonal: generate rows for each octave × each fractional PC
+    const minOctave = Math.floor(PITCH.min / 12);
+    const maxOctave = Math.floor(PITCH.max / 12);
+    for (let oct = minOctave; oct <= maxOctave; oct++) {
+      for (const pc of scale) {
+        const pitch = Math.round((oct * 12 + pc) * 100) / 100;
+        if (pitch >= PITCH.min && pitch <= PITCH.max) rowSet.add(pitch);
+      }
+    }
+  } else {
+    // Standard 12-TET: integer pitch classes
+    const scaleSet = new Set(scale);
+    for (let p = PITCH.max; p >= PITCH.min; p--) {
+      if (scaleSet.has(((p % 12) + 12) % 12)) rowSet.add(p);
+    }
   }
+
+  // Include any active pitches from the shape
   for (const v of shape.vertices) {
     if (v && v.pitches) for (const p of v.pitches) rowSet.add(p);
     if (v && v.subs) {
@@ -28,6 +49,16 @@ function buildRows(scale, shape) {
   return Array.from(rowSet).sort((a, b) => b - a);
 }
 
+// Label for a pitch — handles fractional (microtonal) pitches
+function pitchLabel(pitch) {
+  const nearest = Math.round(pitch);
+  const cents = Math.round((pitch - nearest) * 100);
+  const name = NOTE_NAMES[((nearest % 12) + 12) % 12];
+  const octave = Math.floor(nearest / 12 - 1);
+  if (cents === 0) return name + octave;
+  return name + octave + (cents > 0 ? '+' : '') + cents + '¢';
+}
+
 export default function PianoRoll({ shape, color }) {
   if (!shape) return null;
   const isDrum = DRUM_TIMBRES.has(shape.timbre);
@@ -35,12 +66,66 @@ export default function PianoRoll({ shape, color }) {
   return <MelodicGrid shape={shape} color={color} />;
 }
 
-// ── Scroll position preservation ─────────────────────────────
-function useScrollPreserver(shapeId) {
+// ── Pinch-to-zoom with Reanimated shared value for instant scroll disable ─
+function usePianoZoom(rollZoomH, rollZoomV) {
+  const isPinching = useSharedValue(false);
+  const axisRef = useRef(null);
+  const startH = useRef(1);
+  const startV = useRef(1);
+  const lastUpdate = useRef(0);
+
+  const pinch = useMemo(() =>
+    Gesture.Pinch()
+      .runOnJS(true)
+      .onTouchesDown((e) => {
+        if (e.numberOfTouches >= 2) {
+          const t = e.allTouches;
+          const dx = Math.abs(t[0].x - t[1].x);
+          const dy = Math.abs(t[0].y - t[1].y);
+          axisRef.current = dx > dy ? 'h' : 'v';
+          isPinching.value = true; // Shared value — disables scroll on UI thread instantly
+        }
+      })
+      .onStart(() => {
+        startH.current = rollZoomH;
+        startV.current = rollZoomV;
+      })
+      .onUpdate((e) => {
+        const now = Date.now();
+        if (now - lastUpdate.current < 50) return;
+        lastUpdate.current = now;
+        const dampened = Math.pow(e.scale, 0.5);
+        if (axisRef.current === 'h') {
+          const z = Math.max(1.0, Math.min(4.0, startH.current * dampened));
+          updateState(s => { s.ui.rollZoom = Math.round(z * 100) / 100; });
+        } else {
+          const z = Math.max(0.6, Math.min(3.0, startV.current * dampened));
+          updateState(s => { s.ui.rollZoomV = Math.round(z * 100) / 100; });
+        }
+      })
+      .onEnd(() => { isPinching.value = false; })
+      .onFinalize(() => { isPinching.value = false; }),
+    [rollZoomH, rollZoomV]
+  );
+
+  const outerAnimatedProps = useAnimatedProps(() => ({
+    scrollEnabled: !isPinching.value,
+  }));
+  const innerAnimatedProps = useAnimatedProps(() => ({
+    scrollEnabled: !isPinching.value,
+  }));
+
+  return { pinch, outerAnimatedProps, innerAnimatedProps };
+}
+
+// ── Scroll helpers ───────────────────────────────────────────
+// Disables outer vertical scroll while inner horizontal is active
+function useNestedScroll(shapeId) {
   const outerRef = useRef(null);
   const innerRef = useRef(null);
   const pos = useRef({ x: 0, y: 0 });
   const prevShapeId = useRef(shapeId);
+  const [outerEnabled, setOuterEnabled] = useState(true);
 
   const onOuterScroll = useCallback((e) => {
     pos.current.y = e.nativeEvent.contentOffset.y;
@@ -48,6 +133,11 @@ function useScrollPreserver(shapeId) {
   const onInnerScroll = useCallback((e) => {
     pos.current.x = e.nativeEvent.contentOffset.x;
   }, []);
+
+  // Disable outer while inner is scrolling
+  const onInnerDragStart = useCallback(() => setOuterEnabled(false), []);
+  const onInnerDragEnd = useCallback(() => setOuterEnabled(true), []);
+  const onInnerMomentumEnd = useCallback(() => setOuterEnabled(true), []);
 
   useEffect(() => {
     if (prevShapeId.current !== shapeId) {
@@ -63,7 +153,7 @@ function useScrollPreserver(shapeId) {
     }
   }, [shapeId]);
 
-  return { outerRef, innerRef, onOuterScroll, onInnerScroll, pos };
+  return { outerRef, innerRef, onOuterScroll, onInnerScroll, onInnerDragStart, onInnerDragEnd, onInnerMomentumEnd, outerEnabled, pos };
 }
 
 // ── Drum step sequencer ──────────────────────────────────────
@@ -72,7 +162,8 @@ function DrumGrid({ shape, color }) {
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
   const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
-  const { outerRef, innerRef, onOuterScroll, onInnerScroll } = useScrollPreserver(shape.id);
+  const { pinch, outerAnimatedProps, innerAnimatedProps } = usePianoZoom(rollZoom, rollZoomV);
+  const { outerRef, innerRef, onOuterScroll, onInnerScroll, onInnerDragStart, onInnerDragEnd, onInnerMomentumEnd, outerEnabled } = useNestedScroll(shape.id);
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
 
@@ -80,7 +171,6 @@ function DrumGrid({ shape, color }) {
   const cellW = Math.max(20, Math.round(baseDrumW * rollZoom));
   const cellH = Math.round(48 * rollZoomV);
   const headerH = Math.round(36 * rollZoomV);
-
   const slotLabels = DRUM_SLOTS || ['Kick', 'Snare', 'HiHat', 'Perc'];
 
   function toggleSlot(vi, si, slotIdx) {
@@ -105,9 +195,31 @@ function DrumGrid({ shape, color }) {
   }
 
   return (
+    <GestureDetector gesture={pinch}>
     <View style={{ flex: 1 }}>
-    <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
-      <ScrollView ref={innerRef} horizontal style={styles.innerScroll} nestedScrollEnabled onScroll={onInnerScroll} scrollEventThrottle={16}>
+    <AnimatedScrollView
+      ref={outerRef}
+      style={styles.outerScroll}
+      nestedScrollEnabled
+      directionalLockEnabled
+      waitFor={innerRef}
+      animatedProps={outerAnimatedProps}
+      onScroll={onOuterScroll}
+      scrollEventThrottle={16}
+    >
+      <AnimatedScrollView
+        ref={innerRef}
+        horizontal
+        style={styles.innerScroll}
+        nestedScrollEnabled
+        directionalLockEnabled
+        animatedProps={innerAnimatedProps}
+        onScroll={onInnerScroll}
+        onScrollBeginDrag={onInnerDragStart}
+        onScrollEndDrag={onInnerDragEnd}
+        onMomentumScrollEnd={onInnerMomentumEnd}
+        scrollEventThrottle={16}
+      >
         <View>
           <View style={[styles.headerRow, { height: headerH }]}>
             <View style={[styles.cornerCell, { width: 70 }]}>
@@ -147,9 +259,10 @@ function DrumGrid({ shape, color }) {
             );
           })}
         </View>
-      </ScrollView>
-    </ScrollView>
+      </AnimatedScrollView>
+    </AnimatedScrollView>
     </View>
+    </GestureDetector>
   );
 }
 
@@ -162,11 +275,11 @@ function MelodicGrid({ shape, color }) {
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
   const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
-  const { outerRef, innerRef, onOuterScroll: baseOuterScroll, onInnerScroll, pos } = useScrollPreserver(shape.id);
+  const { pinch, outerAnimatedProps, innerAnimatedProps } = usePianoZoom(rollZoom, rollZoomV);
+  const { outerRef, innerRef, onOuterScroll: baseOuterScroll, onInnerScroll, onInnerDragStart, onInnerDragEnd, onInnerMomentumEnd, outerEnabled, pos } = useNestedScroll(shape.id);
 
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
-
   const labelW = 42;
   const availableWidth = screenWidth - labelW;
   const baseCellW = availableWidth / totalCols;
@@ -206,8 +319,7 @@ function MelodicGrid({ shape, color }) {
       if (v && v.pitches) for (const p of v.pitches) { sum += p; count++; }
     }
     const mid = count > 0 ? Math.round(sum / count) : 60;
-    let targetIdx = 0;
-    let bestDist = Infinity;
+    let targetIdx = 0, bestDist = Infinity;
     for (let i = 0; i < rows.length; i++) {
       const d = Math.abs(rows[i] - mid);
       if (d < bestDist) { bestDist = d; targetIdx = i; }
@@ -233,9 +345,31 @@ function MelodicGrid({ shape, color }) {
   }
 
   return (
+    <GestureDetector gesture={pinch}>
     <View style={{ flex: 1 }}>
-    <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
-      <ScrollView ref={innerRef} horizontal style={styles.innerScroll} nestedScrollEnabled onScroll={onInnerScroll} scrollEventThrottle={16}>
+    <AnimatedScrollView
+      ref={outerRef}
+      style={styles.outerScroll}
+      nestedScrollEnabled
+      directionalLockEnabled
+      waitFor={innerRef}
+      animatedProps={outerAnimatedProps}
+      onScroll={onOuterScroll}
+      scrollEventThrottle={16}
+    >
+      <AnimatedScrollView
+        ref={innerRef}
+        horizontal
+        style={styles.innerScroll}
+        nestedScrollEnabled
+        directionalLockEnabled
+        animatedProps={innerAnimatedProps}
+        onScroll={onInnerScroll}
+        onScrollBeginDrag={onInnerDragStart}
+        onScrollEndDrag={onInnerDragEnd}
+        onMomentumScrollEnd={onInnerMomentumEnd}
+        scrollEventThrottle={16}
+      >
           <View>
             <View style={[styles.headerRow, { height: headerH }]}>
               <View style={[styles.cornerCell, { width: labelW }]}>
@@ -263,8 +397,8 @@ function MelodicGrid({ shape, color }) {
 
             {topSpacer > 0 && <View style={{ height: topSpacer }} />}
             {visibleRows.map(pitch => {
-              const noteName = NOTE_NAMES[((pitch % 12) + 12) % 12] + Math.floor(pitch / 12 - 1);
-              const isC = pitch % 12 === 0;
+              const noteName = pitchLabel(pitch);
+              const isC = Math.abs(pitch % 12) < 0.01 || Math.abs(pitch % 12 - 12) < 0.01;
               return (
                 <View key={`row-${pitch}`} style={styles.row}>
                   <View style={[styles.label, { width: labelW, height: cellH }, isC && styles.labelC]}>
@@ -289,9 +423,10 @@ function MelodicGrid({ shape, color }) {
             })}
             {bottomSpacer > 0 && <View style={{ height: bottomSpacer }} />}
           </View>
-        </ScrollView>
-      </ScrollView>
+        </AnimatedScrollView>
+      </AnimatedScrollView>
     </View>
+    </GestureDetector>
   );
 }
 

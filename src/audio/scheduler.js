@@ -105,6 +105,8 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
       const now = audioContext.currentTime;
       startTime = now;
       nextScheduleTime = now;
+      // Force immediate tick to schedule beat 0 of new scene without waiting 50ms
+      tick();
     }
   }
 
