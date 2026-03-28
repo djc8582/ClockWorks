@@ -69,53 +69,36 @@ export default function PianoRoll({ shape, color }) {
 }
 
 // ── Pinch-to-zoom ────────────────────────────────────────────
-// Uses local state during pinch for fast updates (avoids heavy updateState/refreshRefs).
-// Persists to app state only on pinch end. Worklet sets isPinching on UI thread
-// to disable scroll synchronously. ScrollView from react-native (not RNGH) per issue #3266.
-function usePianoZoom(outerRef) {
-  const [localZoomH, setLocalZoomH] = useState(null); // null = use state.ui.rollZoom
-  const [localZoomV, setLocalZoomV] = useState(null);
-  const stateZoomH = useStore(s => s.ui.rollZoom || 1.0);
-  const stateZoomV = useStore(s => s.ui.rollZoomV || 1.0);
+// Minimal approach: shared values for zoom + isPinching on UI thread.
+// runOnJS only calls a single stable function. No closures over React state.
+// Gesture created once ([] deps) — no recreation that invalidates worklet refs.
 
-  // Active zoom = local during pinch, state otherwise
-  const rollZoom = localZoomH !== null ? localZoomH : stateZoomH;
-  const rollZoomV = localZoomV !== null ? localZoomV : stateZoomV;
+// Module-level zoom update function — stable reference, no closures
+function applyZoom(axisVal, startH, startV, scale) {
+  const dampened = Math.pow(scale, 0.5);
+  if (axisVal === 1) {
+    const z = Math.round(Math.min(4.0, Math.max(1.0, startH * dampened)) * 100) / 100;
+    updateState(s => { s.ui.rollZoom = z; });
+  } else if (axisVal === 2) {
+    const z = Math.round(Math.min(3.0, Math.max(0.6, startV * dampened)) * 100) / 100;
+    updateState(s => { s.ui.rollZoomV = z; });
+  }
+}
+
+function usePianoZoom() {
+  const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
+  const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
 
   const isPinching = useSharedValue(false);
   const axis = useSharedValue(0);
-  const startH = useRef(1);
-  const startV = useRef(1);
-  const scrollYBefore = useRef(0);
-  const cellHBefore = useRef(28);
+  const startH = useSharedValue(1);
+  const startV = useSharedValue(1);
 
-  function onPinchUpdate(a, scale) {
-    const dampened = Math.pow(scale, 0.5);
-    if (a === 1) {
-      setLocalZoomH(Math.round(Math.min(4.0, Math.max(1.0, startH.current * dampened)) * 100) / 100);
-    } else {
-      const oldZV = localZoomV !== null ? localZoomV : stateZoomV;
-      const newZV = Math.round(Math.min(3.0, Math.max(0.6, startV.current * dampened)) * 100) / 100;
-      setLocalZoomV(newZV);
-      // Adjust scroll position to keep the same content centered
-      if (outerRef.current && oldZV > 0) {
-        const ratio = newZV / oldZV;
-        const newY = scrollYBefore.current * ratio;
-        outerRef.current.scrollTo({ y: newY, animated: false });
-        scrollYBefore.current = newY;
-      }
-    }
-  }
+  // Sync shared values from state (for onStart to read)
+  useEffect(() => { startH.value = rollZoom; }, [rollZoom]);
+  useEffect(() => { startV.value = rollZoomV; }, [rollZoomV]);
 
-  function onPinchEnd() {
-    // Persist final zoom to app state
-    const h = localZoomH !== null ? localZoomH : stateZoomH;
-    const v = localZoomV !== null ? localZoomV : stateZoomV;
-    updateState(s => { s.ui.rollZoom = h; s.ui.rollZoomV = v; });
-    setLocalZoomH(null);
-    setLocalZoomV(null);
-  }
-
+  // Gesture created ONCE — empty deps, no recreation, no stale worklet refs
   const pinch = useMemo(() =>
     Gesture.Pinch()
       .onTouchesDown((e) => {
@@ -130,27 +113,24 @@ function usePianoZoom(outerRef) {
       })
       .onStart(() => {
         'worklet';
-        runOnJS((h, v) => { startH.current = h; startV.current = v; })(
-          localZoomH !== null ? localZoomH : stateZoomH,
-          localZoomV !== null ? localZoomV : stateZoomV
-        );
+        // startH/startV already set by useEffect sync above
       })
       .onUpdate((e) => {
         'worklet';
-        runOnJS(onPinchUpdate)(axis.value, e.scale);
+        // Pass all values as args — no closure over React state
+        runOnJS(applyZoom)(axis.value, startH.value, startV.value, e.scale);
       })
       .onEnd(() => {
         'worklet';
         isPinching.value = false;
         axis.value = 0;
-        runOnJS(onPinchEnd)();
       })
       .onFinalize(() => {
         'worklet';
         isPinching.value = false;
         axis.value = 0;
       }),
-    [stateZoomH, stateZoomV, localZoomH, localZoomV]
+    [] // EMPTY — gesture never recreated
   );
 
   const nativeOuter = useMemo(() => Gesture.Native().simultaneousWithExternalGesture(pinch), [pinch]);
@@ -163,7 +143,7 @@ function usePianoZoom(outerRef) {
     scrollEnabled: !isPinching.value,
   }));
 
-  return { pinch, nativeOuter, nativeInner, outerAnimatedProps, innerAnimatedProps, rollZoom, rollZoomV, scrollYBefore };
+  return { pinch, nativeOuter, nativeInner, outerAnimatedProps, innerAnimatedProps, rollZoom, rollZoomV };
 }
 
 // ── Scroll helpers ───────────────────────────────────────────
@@ -209,7 +189,7 @@ function DrumGrid({ shape, color }) {
   const { width: screenWidth } = useWindowDimensions();
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const { outerRef, innerRef, onOuterScroll, onInnerScroll, onInnerDragStart, onInnerDragEnd, onInnerMomentumEnd, outerEnabled } = useNestedScroll(shape.id);
-  const { pinch, nativeOuter, nativeInner, outerAnimatedProps, innerAnimatedProps, rollZoom, rollZoomV } = usePianoZoom(outerRef);
+  const { pinch, nativeOuter, nativeInner, outerAnimatedProps, innerAnimatedProps, rollZoom, rollZoomV } = usePianoZoom();
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
 
@@ -320,7 +300,7 @@ function MelodicGrid({ shape, color }) {
   const scale = useStore(s => s.scale);
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const { outerRef, innerRef, onOuterScroll: baseOuterScroll, onInnerScroll, onInnerDragStart, onInnerDragEnd, onInnerMomentumEnd, outerEnabled, pos } = useNestedScroll(shape.id);
-  const { pinch, nativeOuter, nativeInner, outerAnimatedProps, innerAnimatedProps, rollZoom, rollZoomV, scrollYBefore } = usePianoZoom(outerRef);
+  const { pinch, nativeOuter, nativeInner, outerAnimatedProps, innerAnimatedProps, rollZoom, rollZoomV } = usePianoZoom();
 
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
@@ -339,13 +319,12 @@ function MelodicGrid({ shape, color }) {
     const y = e.nativeEvent.contentOffset.y;
     baseOuterScroll(e);
     scrollYRef.current = y;
-    scrollYBefore.current = y; // Track for zoom scroll compensation
     const prev = scrollYRef.prevWindow || 0;
     if (Math.abs(y - prev) > cellH * 2) {
       scrollYRef.prevWindow = y;
       setScrollY(y);
     }
-  }, [baseOuterScroll, cellH, scrollYBefore]);
+  }, [baseOuterScroll, cellH]);
 
   const viewportH = screenHeight * 0.45;
   const firstVisible = Math.max(0, Math.floor(scrollY / Math.max(1, cellH)) - ROW_BUFFER);
