@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useCallback, useEffect, useState } from 'react';
-import { View, ScrollView, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
-import { GestureDetector, Gesture, ScrollView as GHScrollView } from 'react-native-gesture-handler';
-import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS, DIMENSIONS } from '../constants.js';
+import { View, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
+import { ScrollView } from 'react-native-gesture-handler';
+import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS } from '../constants.js';
 import { updateState, safePanelScene } from '../state.js';
 import { useStore } from '../hooks/useStore.js';
 import PianoRollCell from './PianoRollCell.js';
@@ -11,15 +11,12 @@ function getStepData(vertex, stepIndex) {
   return vertex.subs && vertex.subs[stepIndex - 1];
 }
 
-// Build all pitch rows for the current scale across the full MIDI range.
-// Also includes any out-of-scale pitches that are active in the shape.
 function buildRows(scale, shape) {
   const scaleSet = new Set(scale);
   const rowSet = new Set();
   for (let p = PITCH.max; p >= PITCH.min; p--) {
     if (scaleSet.has(p % 12)) rowSet.add(p);
   }
-  // Include any active pitches that may be outside the current scale
   for (const v of shape.vertices) {
     if (v && v.pitches) for (const p of v.pitches) rowSet.add(p);
     if (v && v.subs) {
@@ -33,60 +30,12 @@ function buildRows(scale, shape) {
 
 export default function PianoRoll({ shape, color }) {
   if (!shape) return null;
-
   const isDrum = DRUM_TIMBRES.has(shape.timbre);
-
   if (isDrum) return <DrumGrid shape={shape} color={color} />;
   return <MelodicGrid shape={shape} color={color} />;
 }
 
-// ── Pinch-to-zoom (GarageBand-style: axis-locked based on finger orientation) ──
-function usePianoZoom() {
-  const rollZoomH = useStore(s => s.ui.rollZoom || 1.0);
-  const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
-  const startH = useRef(1);
-  const startV = useRef(1);
-  const axis = useRef(null); // 'h' or 'v', locked on start
-  const scrollEnabled = useRef(true);
-
-  const pinch = useMemo(() =>
-    Gesture.Pinch()
-      .onTouchesDown((e) => {
-        if (e.numberOfTouches >= 2) {
-          // Detect axis from finger positions
-          const t = e.allTouches;
-          const dx = Math.abs(t[0].x - t[1].x);
-          const dy = Math.abs(t[0].y - t[1].y);
-          axis.current = dx > dy ? 'h' : 'v';
-          scrollEnabled.current = false;
-        }
-      })
-      .onStart(() => {
-        startH.current = rollZoomH;
-        startV.current = rollZoomV;
-      })
-      .onUpdate((e) => {
-        if (axis.current === 'h') {
-          const z = Math.max(DIMENSIONS.rollZoomMin, Math.min(DIMENSIONS.rollZoomMax, startH.current * e.scale));
-          updateState(s => { s.ui.rollZoom = Math.round(z * 100) / 100; });
-        } else {
-          const z = Math.max(DIMENSIONS.rollZoomMin, Math.min(DIMENSIONS.rollZoomMax, startV.current * e.scale));
-          updateState(s => { s.ui.rollZoomV = Math.round(z * 100) / 100; });
-        }
-      })
-      .onEnd(() => {
-        axis.current = null;
-        scrollEnabled.current = true;
-      })
-      .runOnJS(true),
-    [rollZoomH, rollZoomV]
-  );
-
-  return { pinch, scrollEnabled };
-}
-
-// ── Scroll position preservation hook ────────────────────────
-// Fix #5: Only restores scroll on shape change, not every render.
+// ── Scroll position preservation ─────────────────────────────
 function useScrollPreserver(shapeId) {
   const outerRef = useRef(null);
   const innerRef = useRef(null);
@@ -100,16 +49,12 @@ function useScrollPreserver(shapeId) {
     pos.current.x = e.nativeEvent.contentOffset.x;
   }, []);
 
-  // Only restore scroll when returning to a shape we had a saved position for,
-  // NOT on every render (which fights user scrolling).
   useEffect(() => {
     if (prevShapeId.current !== shapeId) {
-      // Shape changed — don't restore old position, let the init-scroll effect handle it
       pos.current = { x: 0, y: 0 };
       prevShapeId.current = shapeId;
       return;
     }
-    // Same shape re-render — restore saved position
     if (pos.current.y > 0 && outerRef.current) {
       outerRef.current.scrollTo({ y: pos.current.y, animated: false });
     }
@@ -122,25 +67,22 @@ function useScrollPreserver(shapeId) {
 }
 
 // ── Drum step sequencer ──────────────────────────────────────
-// Drum slots are encoded as pitches: 0=kick, 1=snare, 2=hihat, 3=perc.
-// Any slot can be active at any step — no vertex-to-slot restriction.
 function DrumGrid({ shape, color }) {
   const { width: screenWidth } = useWindowDimensions();
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
   const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
-  const { pinch } = usePianoZoom();
   const { outerRef, innerRef, onOuterScroll, onInnerScroll } = useScrollPreserver(shape.id);
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
 
-  const cellW = Math.max(44, Math.round(Math.floor((screenWidth - 70) / totalCols) * rollZoom));
+  const baseDrumW = (screenWidth - 70) / totalCols;
+  const cellW = Math.max(20, Math.round(baseDrumW * rollZoom));
   const cellH = Math.round(48 * rollZoomV);
   const headerH = Math.round(36 * rollZoomV);
 
   const slotLabels = DRUM_SLOTS || ['Kick', 'Snare', 'HiHat', 'Perc'];
 
-  // Fix #3: bounds-check activeSceneIndex
   function toggleSlot(vi, si, slotIdx) {
     updateState(s => {
       const scene = safePanelScene(s);
@@ -152,11 +94,9 @@ function DrumGrid({ shape, color }) {
       if (!sd.pitches) sd.pitches = [];
       const idx = sd.pitches.indexOf(slotIdx);
       if (idx !== -1) {
-        // Remove this slot
         sd.pitches.splice(idx, 1);
         if (sd.pitches.length === 0) sd.muted = true;
       } else {
-        // Add this slot
         sd.pitches.push(slotIdx);
         sd.pitches.sort((a, b) => a - b);
         sd.muted = false;
@@ -165,12 +105,10 @@ function DrumGrid({ shape, color }) {
   }
 
   return (
-    <GestureDetector gesture={pinch}>
     <View style={{ flex: 1 }}>
     <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
       <ScrollView ref={innerRef} horizontal style={styles.innerScroll} nestedScrollEnabled onScroll={onInnerScroll} scrollEventThrottle={16}>
         <View>
-          {/* Column headers */}
           <View style={[styles.headerRow, { height: headerH }]}>
             <View style={[styles.cornerCell, { width: 70 }]}>
               <Text style={styles.cornerText}>Step</Text>
@@ -179,25 +117,13 @@ function DrumGrid({ shape, color }) {
               Array.from({ length: sub }).map((_, s) => {
                 const sel = vi === selectedNode;
                 return (
-                  <View
-                    key={`dh-${vi}-${s}`}
-                    style={[
-                      styles.colHeader,
-                      { width: cellW, height: headerH },
-                      sel && styles.colHeaderSelected,
-                      s === 0 && vi > 0 && styles.groupStart,
-                    ]}
-                  >
-                    <Text style={[styles.colNum, sel && { color: color.main, fontWeight: '700' }]}>
-                      {s === 0 ? vi + 1 : ''}
-                    </Text>
+                  <View key={`dh-${vi}-${s}`} style={[styles.colHeader, { width: cellW, height: headerH }, sel && styles.colHeaderSelected, s === 0 && vi > 0 && styles.groupStart]}>
+                    <Text style={[styles.colNum, sel && { color: color.main, fontWeight: '700' }]}>{s === 0 ? vi + 1 : ''}</Text>
                   </View>
                 );
               })
             )}
           </View>
-
-          {/* Drum slot rows — every cell is tappable */}
           {slotLabels.map((slot, slotIdx) => {
             const label = slot.charAt(0).toUpperCase() + slot.slice(1);
             return (
@@ -210,24 +136,9 @@ function DrumGrid({ shape, color }) {
                     const stepData = getStepData(shape.vertices[vi], s);
                     const pitches = stepData ? (stepData.pitches || []) : [];
                     const isActive = pitches.includes(slotIdx);
-
                     return (
-                      <Pressable
-                        key={`dc-${vi}-${s}-${slotIdx}`}
-                        style={[
-                          styles.drumCell,
-                          { width: cellW, height: cellH },
-                          s === 0 && vi > 0 && styles.groupStart,
-                          vi === selectedNode && styles.drumCellSelected,
-                        ]}
-                        onPress={() => toggleSlot(vi, s, slotIdx)}
-                      >
-                        <View style={[
-                          styles.drumDot,
-                          isActive
-                            ? { backgroundColor: color.main }
-                            : { backgroundColor: 'rgba(0,0,0,0.06)' },
-                        ]} />
+                      <Pressable key={`dc-${vi}-${s}-${slotIdx}`} style={[styles.drumCell, { width: cellW, height: cellH }, s === 0 && vi > 0 && styles.groupStart, vi === selectedNode && styles.drumCellSelected]} onPress={() => toggleSlot(vi, s, slotIdx)}>
+                        <View style={[styles.drumDot, isActive ? { backgroundColor: color.main } : { backgroundColor: 'rgba(0,0,0,0.06)' }]} />
                       </Pressable>
                     );
                   })
@@ -239,14 +150,11 @@ function DrumGrid({ shape, color }) {
       </ScrollView>
     </ScrollView>
     </View>
-    </GestureDetector>
   );
 }
 
-// ── Melodic piano roll ───────────────────────────────────────
-// Fix #2: Row windowing — only renders visible rows + buffer. Reduces worst case
-// from 7008 components to ~600 (visible viewport only).
-const ROW_BUFFER = 4; // extra rows above/below viewport
+// ── Melodic piano roll (windowed) ────────────────────────────
+const ROW_BUFFER = 4;
 
 function MelodicGrid({ shape, color }) {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
@@ -254,7 +162,6 @@ function MelodicGrid({ shape, color }) {
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
   const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
-  const { pinch } = usePianoZoom();
   const { outerRef, innerRef, onOuterScroll: baseOuterScroll, onInnerScroll, pos } = useScrollPreserver(shape.id);
 
   const sub = shape.subdivision || 1;
@@ -262,21 +169,19 @@ function MelodicGrid({ shape, color }) {
 
   const labelW = 42;
   const availableWidth = screenWidth - labelW;
-  const baseCellW = Math.max(40, Math.floor(availableWidth / totalCols));
-  const cellW = Math.round(baseCellW * rollZoom);
-  const cellH = Math.round(28 * rollZoomV);
-  const headerH = Math.round(44 * rollZoom);
+  const baseCellW = availableWidth / totalCols;
+  const cellW = Math.max(20, Math.round(baseCellW * rollZoom));
+  const cellH = Math.max(14, Math.round(28 * rollZoomV));
+  const headerH = Math.round(44 * Math.min(rollZoomV, 1.5));
 
   const rows = useMemo(() => buildRows(scale, shape), [scale, shape]);
 
-  // Track scroll offset for row windowing
   const [scrollY, setScrollY] = useState(0);
   const scrollYRef = useRef(0);
   const onOuterScroll = useCallback((e) => {
     const y = e.nativeEvent.contentOffset.y;
     baseOuterScroll(e);
     scrollYRef.current = y;
-    // Batch scroll state updates to avoid per-pixel re-renders
     const prev = scrollYRef.prevWindow || 0;
     if (Math.abs(y - prev) > cellH * 2) {
       scrollYRef.prevWindow = y;
@@ -284,17 +189,15 @@ function MelodicGrid({ shape, color }) {
     }
   }, [baseOuterScroll, cellH]);
 
-  // Compute visible row window
-  const viewportH = screenHeight * 0.45; // approximate panel height
-  const firstVisible = Math.max(0, Math.floor(scrollY / cellH) - ROW_BUFFER);
-  const lastVisible = Math.min(rows.length - 1, Math.ceil((scrollY + viewportH) / cellH) + ROW_BUFFER);
+  const viewportH = screenHeight * 0.45;
+  const firstVisible = Math.max(0, Math.floor(scrollY / Math.max(1, cellH)) - ROW_BUFFER);
+  const lastVisible = Math.min(rows.length - 1, Math.ceil((scrollY + viewportH) / Math.max(1, cellH)) + ROW_BUFFER);
   const visibleRows = rows.slice(firstVisible, lastVisible + 1);
   const topSpacer = firstVisible * cellH;
   const bottomSpacer = Math.max(0, (rows.length - lastVisible - 1) * cellH);
 
   const hasScrolledInit = useRef(null);
 
-  // Fix #5: Only scroll on shape change, not every render
   useEffect(() => {
     if (hasScrolledInit.current === shape.id || rows.length === 0) return;
     hasScrolledInit.current = shape.id;
@@ -318,7 +221,6 @@ function MelodicGrid({ shape, color }) {
     });
   }, [shape.id]);
 
-  // Fix #3: bounds-check activeSceneIndex in every updateState callback
   function toggleMute(vi, si) {
     updateState(s => {
       const scene = safePanelScene(s);
@@ -331,19 +233,10 @@ function MelodicGrid({ shape, color }) {
   }
 
   return (
-    <GestureDetector gesture={pinch}>
     <View style={{ flex: 1 }}>
     <ScrollView ref={outerRef} style={styles.outerScroll} nestedScrollEnabled onScroll={onOuterScroll} scrollEventThrottle={16}>
-      <ScrollView
-        ref={innerRef}
-        horizontal
-        style={styles.innerScroll}
-        nestedScrollEnabled
-        onScroll={onInnerScroll}
-        scrollEventThrottle={16}
-      >
+      <ScrollView ref={innerRef} horizontal style={styles.innerScroll} nestedScrollEnabled onScroll={onInnerScroll} scrollEventThrottle={16}>
           <View>
-            {/* Column headers */}
             <View style={[styles.headerRow, { height: headerH }]}>
               <View style={[styles.cornerCell, { width: labelW }]}>
                 <Text style={styles.cornerText}>Edit</Text>
@@ -354,54 +247,29 @@ function MelodicGrid({ shape, color }) {
                   const sel = vi === selectedNode;
                   const stepData = getStepData(shape.vertices[vi], s);
                   const muted = stepData ? stepData.muted : false;
-
                   return (
-                    <View
-                      key={`hdr-${vi}-${s}`}
-                      style={[
-                        styles.colHeader,
-                        { width: cellW, height: headerH },
-                        sel && styles.colHeaderSelected,
-                        isFirst && vi > 0 && styles.groupStart,
-                      ]}
-                    >
+                    <View key={`hdr-${vi}-${s}`} style={[styles.colHeader, { width: cellW, height: headerH }, sel && styles.colHeaderSelected, isFirst && vi > 0 && styles.groupStart]}>
                       {isFirst ? (
-                        <Text style={[
-                          styles.colNum,
-                          sel && { color: color.main, fontWeight: '700' },
-                        ]}>
-                          {vi + 1}
-                        </Text>
+                        <Text style={[styles.colNum, sel && { color: color.main, fontWeight: '700' }]}>{vi + 1}</Text>
                       ) : (
-                        <Text style={[styles.colNum, { fontSize: 9, opacity: 0.4 }]}>
-                          {s + 1}
-                        </Text>
+                        <Text style={[styles.colNum, { fontSize: 9, opacity: 0.4 }]}>{s + 1}</Text>
                       )}
-                      <Pressable
-                        style={[
-                          styles.muteBtn,
-                          !muted && { backgroundColor: color.main, borderColor: color.main },
-                        ]}
-                        onPress={() => toggleMute(vi, s)}
-                      />
+                      <Pressable style={[styles.muteBtn, !muted && { backgroundColor: color.main, borderColor: color.main }]} onPress={() => toggleMute(vi, s)} />
                     </View>
                   );
                 })
               )}
             </View>
 
-            {/* Fix #2: Windowed pitch rows — only visible rows are mounted */}
             {topSpacer > 0 && <View style={{ height: topSpacer }} />}
             {visibleRows.map(pitch => {
-              const noteName = NOTE_NAMES[pitch % 12] + Math.floor(pitch / 12 - 1);
+              const noteName = NOTE_NAMES[((pitch % 12) + 12) % 12] + Math.floor(pitch / 12 - 1);
               const isC = pitch % 12 === 0;
-
               return (
                 <View key={`row-${pitch}`} style={styles.row}>
                   <View style={[styles.label, { width: labelW, height: cellH }, isC && styles.labelC]}>
                     <Text style={[styles.labelText, isC && styles.labelTextC]}>{noteName}</Text>
                   </View>
-
                   {Array.from({ length: shape.sides }).map((_, vi) =>
                     Array.from({ length: sub }).map((_, s) => {
                       const stepData = getStepData(shape.vertices[vi], s);
@@ -411,24 +279,8 @@ function MelodicGrid({ shape, color }) {
                       const vel = stepData ? stepData.velocity : 0;
                       const sel = vi === selectedNode;
                       const isFirst = s === 0;
-
                       return (
-                        <PianoRollCell
-                          key={`cell-${vi}-${s}-${pitch}`}
-                          shapeId={shape.id}
-                          vertexIndex={vi}
-                          stepIndex={s}
-                          pitch={pitch}
-                          isActive={isActive}
-                          isMuted={isMuted}
-                          velocity={vel}
-                          color={color}
-                          isSelectedColumn={sel}
-                          isC={isC}
-                          isGroupStart={isFirst && vi > 0}
-                          cellWidth={cellW}
-                          cellHeight={cellH}
-                        />
+                        <PianoRollCell key={`cell-${vi}-${s}-${pitch}`} shapeId={shape.id} vertexIndex={vi} stepIndex={s} pitch={pitch} isActive={isActive} isMuted={isMuted} velocity={vel} color={color} isSelectedColumn={sel} isC={isC} isGroupStart={isFirst && vi > 0} cellWidth={cellW} cellHeight={cellH} />
                       );
                     })
                   )}
@@ -440,53 +292,27 @@ function MelodicGrid({ shape, color }) {
         </ScrollView>
       </ScrollView>
     </View>
-    </GestureDetector>
   );
 }
 
 const styles = StyleSheet.create({
   outerScroll: { flex: 1 },
   innerScroll: { flex: 1 },
-  headerRow: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.1)',
-  },
-  cornerCell: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: COLORS.panelBg,
-  },
+  headerRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.1)' },
+  cornerCell: { justifyContent: 'center', alignItems: 'center', backgroundColor: COLORS.panelBg },
   cornerText: { fontSize: 11, fontWeight: '500', color: COLORS.textDim },
-  colHeader: {
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 2,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: 'rgba(0,0,0,0.06)',
-  },
+  colHeader: { justifyContent: 'center', alignItems: 'center', gap: 2, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: 'rgba(0,0,0,0.06)' },
   colHeaderSelected: { backgroundColor: 'rgba(0,0,0,0.04)' },
   colNum: { fontSize: 11, fontWeight: '600', color: COLORS.text },
-  muteBtn: {
-    width: 10, height: 10, borderRadius: 5,
-    borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.15)', backgroundColor: 'transparent',
-  },
+  muteBtn: { width: 10, height: 10, borderRadius: 5, borderWidth: 1.5, borderColor: 'rgba(0,0,0,0.15)', backgroundColor: 'transparent' },
   groupStart: { borderLeftWidth: 1.5, borderLeftColor: 'rgba(0,0,0,0.12)' },
   row: { flexDirection: 'row' },
-  label: {
-    justifyContent: 'center', paddingLeft: 4, backgroundColor: COLORS.panelBg,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(0,0,0,0.06)',
-  },
+  label: { justifyContent: 'center', paddingLeft: 4, backgroundColor: COLORS.panelBg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(0,0,0,0.06)' },
   labelC: { borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.12)' },
   labelText: { fontSize: 9, color: COLORS.textDim },
   labelTextC: { fontWeight: '700', color: COLORS.text },
-  // Drum grid styles
   drumLabel: { fontSize: 12, fontWeight: '600', color: COLORS.text },
-  drumCell: {
-    justifyContent: 'center', alignItems: 'center',
-    borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: 'rgba(0,0,0,0.06)',
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(0,0,0,0.06)',
-  },
+  drumCell: { justifyContent: 'center', alignItems: 'center', borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: 'rgba(0,0,0,0.06)', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: 'rgba(0,0,0,0.06)' },
   drumCellSelected: { backgroundColor: 'rgba(0,0,0,0.03)' },
   drumDot: { width: 24, height: 24, borderRadius: 12 },
 });

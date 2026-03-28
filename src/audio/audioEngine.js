@@ -262,11 +262,12 @@ function rescheduleAll() {
   }
 }
 
-// Scene transition: let old voices ring out naturally, reset schedule for new scene.
+// Scene transition: quickly expire old voices, reset schedule for new scene.
 function transitionScene() {
   updateCycleDuration();
   if (audioInitialized && scheduler) {
-    // Don't kill old voices — let them decay naturally for smooth crossfade
+    // Mark old voices as expired — pruneVoices kills them cleanly on next tick
+    if (audioContext) fadeOutAllVoices(audioContext);
     cleanupOrphanedSynths();
     scheduler.resetScheduleWindow();
   }

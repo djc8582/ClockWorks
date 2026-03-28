@@ -383,10 +383,12 @@ function pruneVoices(now) {
 }
 
 function fadeOutAllVoices(ctx) {
-  // Kill all voices immediately — no setTimeout (crashes on 0.6.5).
-  // The small pop from immediate disconnect is preferable to a native crash.
-  const toFade = activeVoices.splice(0, activeVoices.length);
-  for (const v of toFade) killVoice(v);
+  // Mark all voices as expired so pruneVoices kills them on next tick.
+  // This avoids both the pop from immediate disconnect AND the native crash from setTimeout.
+  const now = ctx ? ctx.currentTime : 0;
+  for (const v of activeVoices) {
+    v.endTime = now; // Will be cleaned up by pruneVoices on next triggerTimbre call
+  }
 }
 
 // ── Sample lookup ────────────────────────────────────────────

@@ -79,13 +79,13 @@ export const TIMING = {
 
 // ── Pitch ──────────────────────────────────────────────────────
 export const PITCH = {
-  min: 24,
-  max: 96,
+  min: 0,    // C-1
+  max: 131,  // B10
   defaultPitch: 60,
   defaultVelocity: 85,
 };
 
-export const MAX_SHAPES = 5;
+export const MAX_SHAPES = 20;
 export const MAX_SCENES = 8;
 export const MIN_SIDES = 2;
 export const MAX_SIDES = 24;
@@ -154,7 +154,7 @@ export const SCALE_DEFINITIONS = {
   "Raga Bhairav": [0, 1, 4, 5, 7, 8, 11],
   "Raga Marwa": [0, 1, 4, 6, 7, 9, 11],
   "Maqam Hijaz": [0, 1, 4, 5, 7, 8, 10],
-  "Maqam Bayati": [0, 1.5, 3, 5, 7, 8, 10],
+  "Maqam Bayati": [0, 2, 3, 5, 7, 8, 10],
   "Phrygian Dom": [0, 1, 4, 5, 7, 8, 10],
   "Dbl Harmonic": [0, 1, 4, 5, 7, 8, 11],
   "Hungarian Min": [0, 2, 3, 6, 7, 8, 11],
@@ -174,5 +174,48 @@ export const SCALE_DEFINITIONS = {
   "Min Triad": [0, 3, 7],
   "Power": [0, 7],
   "Quartal": [0, 5, 10],
+  "Fifths": [0, 7],
+  "Octaves": [0],
   "Chromatic": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  // Harmonic series (approximated to 12-TET)
+  "Harm 1-8": [0, 12, 7, 5, 4, 3, 2, 10],  // harmonics 1-8 mapped
+  "Harm Odd": [0, 7, 4, 11, 2, 9],           // odd harmonics 1,3,5,7,9,11
+  "Harm 7th": [0, 4, 7, 10],                   // natural 7th chord from series
+  "Overtone": [0, 2, 4, 6, 7, 9, 10],         // Lydian dominant (overtone scale)
+  // Microtonal approximations (quartertone-adjacent in 12-TET)
+  "Quarter 6": [0, 1, 3, 5, 7, 9],           // 6-note quartertone approx
+  "Quarter 8": [0, 1, 3, 4, 6, 7, 9, 10],    // 8-note quartertone approx
+  "Slendro": [0, 2, 5, 7, 9],                 // Javanese 5-tone (closest 12-TET)
+  "Equi 5": [0, 2, 5, 7, 10],                 // 5-TET approximation
+  "Equi 6": [0, 2, 4, 6, 8, 10],             // 6-TET = whole tone
+  "Equi 7": [0, 2, 3, 5, 7, 9, 10],          // 7-TET approximation
+  "Equi 8": [0, 2, 3, 5, 6, 8, 9, 11],       // 8-TET approximation
+  // African / Gamelan / Other world
+  "Akebono": [0, 2, 3, 7, 8],
+  "Yo": [0, 2, 5, 7, 9],
+  "Ritusen": [0, 2, 5, 7, 9],
+  "Balinese": [0, 1, 3, 7, 8],
+  "Egyptian": [0, 2, 5, 7, 10],
+  "Chinese": [0, 4, 6, 7, 11],
+  "Mongolian": [0, 2, 4, 7, 9],
+  "Japanese": [0, 1, 5, 7, 8],
+  // Symmetrical / Mathematical
+  "Messiaen 1": [0, 2, 4, 6, 8, 10],
+  "Messiaen 2": [0, 1, 3, 4, 6, 7, 9, 10],
+  "Messiaen 3": [0, 1, 2, 4, 5, 6, 8, 9, 10],
+  "Messiaen 4": [0, 1, 2, 5, 6, 7, 8, 11],
+  "Messiaen 5": [0, 1, 5, 6, 7, 11],
+  "Messiaen 6": [0, 1, 2, 4, 5, 6, 8, 9, 10],
+  "Messiaen 7": [0, 1, 2, 3, 5, 6, 7, 8, 9, 11],
+  // Chords as scales
+  "Maj7": [0, 4, 7, 11],
+  "Min7": [0, 3, 7, 10],
+  "Dom7": [0, 4, 7, 10],
+  "Dim7": [0, 3, 6, 9],
+  "Aug": [0, 4, 8],
+  "Sus4": [0, 5, 7],
+  "Sus2": [0, 2, 7],
+  "9th": [0, 2, 4, 7, 10],
+  "11th": [0, 2, 4, 5, 7, 10],
+  "13th": [0, 2, 4, 5, 7, 9, 10],
 };

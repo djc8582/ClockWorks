@@ -83,7 +83,7 @@ export default React.memo(function TopBar() {
         <Slider
           style={styles.bpmSlider}
           minimumValue={10}
-          maximumValue={400}
+          maximumValue={1000}
           step={1}
           value={bpm}
           onValueChange={onBpmChange}

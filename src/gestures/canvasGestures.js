@@ -4,6 +4,7 @@ import { getState, getShapes, updateState, generateShapeId, safePanelScene } fro
 import { calculateRingRadii } from '../shapes.js';
 import { hitTest, hitTestGhostRing, getNextSideCount, getNextColorIndex } from './hitTesting.js';
 import { initAudio, startPlayback, pauseAudio, resumeAudio, rescheduleAll } from '../audio/audioEngine.js';
+import { resetCycleCount } from '../sequencer.js';
 import { DIMENSIONS, MAX_SHAPES, PITCH, TIMBRES, DRUM_TIMBRES } from '../constants.js';
 import { distanceBetween } from '../shapes.js';
 
@@ -27,7 +28,9 @@ export function handlePlayPause() {
     pauseAudio();
     updateState(s => { s.ui.playing = false; });
   } else {
-    resumeAudio();
+    // Restart from beginning of sequence
+    resetCycleCount();
+    startPlayback();
     updateState(s => { s.ui.playing = true; });
   }
 }
@@ -140,7 +143,7 @@ export function addNewShape(sides) {
   const newId = generateShapeId();
   const vertices = [];
   for (let i = 0; i < sides; i++) {
-    vertices.push({ pitches: [PITCH.defaultPitch], velocity: PITCH.defaultVelocity, muted: false, subs: [] });
+    vertices.push({ pitches: [], velocity: PITCH.defaultVelocity, muted: true, subs: [] });
   }
 
   // Fix #3: bounds-check activeSceneIndex before mutating
