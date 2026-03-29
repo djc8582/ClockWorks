@@ -16,9 +16,9 @@ function buildRows(scale, shape) {
   const rowSet = new Set();
   const hasFractional = scale.some(pc => pc !== Math.floor(pc));
   if (hasFractional) {
-    const minOctave = Math.floor(PITCH.min / 12);
-    const maxOctave = Math.floor(PITCH.max / 12);
-    for (let oct = minOctave; oct <= maxOctave; oct++) {
+    const minOct = Math.floor(PITCH.min / 12);
+    const maxOct = Math.floor(PITCH.max / 12);
+    for (let oct = minOct; oct <= maxOct; oct++) {
       for (const pc of scale) {
         const pitch = Math.round((oct * 12 + pc) * 100) / 100;
         if (pitch >= PITCH.min && pitch <= PITCH.max) rowSet.add(pitch);
@@ -32,10 +32,8 @@ function buildRows(scale, shape) {
   }
   for (const v of shape.vertices) {
     if (v && v.pitches) for (const p of v.pitches) rowSet.add(p);
-    if (v && v.subs) {
-      for (const sub of v.subs) {
-        if (sub && sub.pitches) for (const p of sub.pitches) rowSet.add(p);
-      }
+    if (v && v.subs) for (const sub of v.subs) {
+      if (sub && sub.pitches) for (const p of sub.pitches) rowSet.add(p);
     }
   }
   return Array.from(rowSet).sort((a, b) => b - a);
@@ -52,110 +50,158 @@ function pitchLabel(pitch) {
 
 export default function PianoRoll({ shape, color }) {
   if (!shape) return null;
-  const isDrum = DRUM_TIMBRES.has(shape.timbre);
-  if (isDrum) return <DrumGrid shape={shape} color={color} />;
+  if (DRUM_TIMBRES.has(shape.timbre)) return <DrumGrid shape={shape} color={color} />;
   return <MelodicGrid shape={shape} color={color} />;
 }
 
-// ── Module-level zoom setters (stable refs for runOnJS) ──────
-function setZoomH(z) { updateState(s => { s.ui.rollZoom = z; }); }
-function setZoomV(z) { updateState(s => { s.ui.rollZoomV = z; }); }
+// ── Stable zoom persister for runOnJS ────────────────────────
+function persistZoom(h, v) {
+  updateState(s => {
+    s.ui.rollZoom = Math.round(h * 100) / 100;
+    s.ui.rollZoomV = Math.round(v * 100) / 100;
+  });
+}
 
-// ── Gesture hook: pan + pinch, no ScrollView ─────────────────
-// Architecture B: all interaction via Gesture.Simultaneous(pan, pinch).
-// Pan = 1-finger drag. Pinch = 2-finger axis-locked focal-point zoom.
+// ── Gesture + layout hook ────────────────────────────────────
+// No ScrollView. All interaction via Gesture.Simultaneous(pan, pinch).
+// Content position driven by offsetX/offsetY shared values on UI thread.
 function usePianoGestures() {
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
   const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
 
-  const translateX = useSharedValue(0);
-  const translateY = useSharedValue(0);
+  // Scroll position (≤ 0)
+  const offsetX = useSharedValue(0);
+  const offsetY = useSharedValue(0);
+  // Zoom on UI thread
+  const zoomH = useSharedValue(rollZoom);
+  const zoomV = useSharedValue(rollZoomV);
+  // Pinch tracking
   const isPinching = useSharedValue(false);
-  const axis = useSharedValue(0);
-  const savedFX = useSharedValue(0);
-  const savedFY = useSharedValue(0);
-  const savedTX = useSharedValue(0);
-  const savedTY = useSharedValue(0);
-  const savedZH = useSharedValue(1);
-  const savedZV = useSharedValue(1);
-  const panSTX = useSharedValue(0);
-  const panSTY = useSharedValue(0);
-  const minTX = useSharedValue(0);
-  const minTY = useSharedValue(0);
+  const pinchAxis = useSharedValue(0); // 0=none, 1=H, 2=V
+  const pinchFocalX = useSharedValue(0);
+  const pinchFocalY = useSharedValue(0);
+  const pinchStartOX = useSharedValue(0);
+  const pinchStartOY = useSharedValue(0);
+  const pinchStartZH = useSharedValue(1);
+  const pinchStartZV = useSharedValue(1);
+  // Pan tracking
+  const panStartOX = useSharedValue(0);
+  const panStartOY = useSharedValue(0);
+  // Grid dimensions for worklet clamping (synced from React)
+  const sv_totalCols = useSharedValue(1);
+  const sv_baseCellW = useSharedValue(40);
+  const sv_totalRows = useSharedValue(1);
+  const sv_baseCellH = useSharedValue(28);
+  const sv_viewW = useSharedValue(300);
+  const sv_viewH = useSharedValue(300);
 
-  useEffect(() => { savedZH.value = rollZoom; }, [rollZoom]);
-  useEffect(() => { savedZV.value = rollZoomV; }, [rollZoomV]);
+  // Sync zoom: React state → shared values
+  useEffect(() => { zoomH.value = rollZoom; }, [rollZoom]);
+  useEffect(() => { zoomV.value = rollZoomV; }, [rollZoomV]);
 
+  // ── Pan gesture ────────────────────────────────────────────
   const pan = useMemo(() => Gesture.Pan()
+    .minDistance(10)
     .onStart(() => {
       'worklet';
-      panSTX.value = translateX.value;
-      panSTY.value = translateY.value;
+      panStartOX.value = offsetX.value;
+      panStartOY.value = offsetY.value;
     })
     .onUpdate((e) => {
       'worklet';
-      if (e.numberOfPointers === 1 && !isPinching.value) {
-        translateX.value = Math.max(minTX.value, Math.min(0, panSTX.value + e.translationX));
-        translateY.value = Math.max(minTY.value, Math.min(0, panSTY.value + e.translationY));
-      }
+      // Only single-finger pan, not during pinch
+      if (e.numberOfPointers !== 1 || isPinching.value) return;
+      const cw = sv_totalCols.value * Math.max(20, Math.round(sv_baseCellW.value * zoomH.value));
+      const ch = sv_totalRows.value * Math.max(14, Math.round(sv_baseCellH.value * zoomV.value));
+      const minX = Math.min(0, sv_viewW.value - cw);
+      const minY = Math.min(0, sv_viewH.value - ch);
+      offsetX.value = Math.max(minX, Math.min(0, panStartOX.value + e.translationX));
+      offsetY.value = Math.max(minY, Math.min(0, panStartOY.value + e.translationY));
     }), []);
 
+  // ── Pinch gesture ──────────────────────────────────────────
   const pinch = useMemo(() => Gesture.Pinch()
     .onTouchesDown((e) => {
       'worklet';
       if (e.numberOfTouches >= 2) {
         isPinching.value = true;
         const t = e.allTouches;
-        axis.value = Math.abs(t[0].x - t[1].x) > Math.abs(t[0].y - t[1].y) ? 1 : 2;
+        const dx = Math.abs(t[0].x - t[1].x);
+        const dy = Math.abs(t[0].y - t[1].y);
+        pinchAxis.value = dx > dy ? 1 : 2;
+        pinchFocalX.value = (t[0].x + t[1].x) / 2;
+        pinchFocalY.value = (t[0].y + t[1].y) / 2;
       }
     })
-    .onStart((e) => {
+    .onStart(() => {
       'worklet';
-      savedFX.value = e.focalX;
-      savedFY.value = e.focalY;
-      savedTX.value = translateX.value;
-      savedTY.value = translateY.value;
+      pinchStartOX.value = offsetX.value;
+      pinchStartOY.value = offsetY.value;
+      pinchStartZH.value = zoomH.value;
+      pinchStartZV.value = zoomV.value;
     })
     .onUpdate((e) => {
       'worklet';
-      // Finger lifted mid-pinch: transition to pan
+      // Finger lifted mid-pinch → allow pan to resume
       if (e.numberOfPointers === 1 && isPinching.value) {
         isPinching.value = false;
-        panSTX.value = translateX.value;
-        panSTY.value = translateY.value;
+        panStartOX.value = offsetX.value;
+        panStartOY.value = offsetY.value;
         return;
       }
       if (e.numberOfPointers !== 2) return;
-      const d = Math.pow(e.scale, 0.5);
-      if (axis.value === 1) {
-        const nz = Math.round(Math.min(4.0, Math.max(1.0, savedZH.value * d)) * 100) / 100;
-        const r = nz / savedZH.value;
-        translateX.value = savedFX.value - (savedFX.value - savedTX.value) * r;
-        runOnJS(setZoomH)(nz);
-      } else if (axis.value === 2) {
-        const nz = Math.round(Math.min(3.0, Math.max(0.6, savedZV.value * d)) * 100) / 100;
-        const r = nz / savedZV.value;
-        translateY.value = savedFY.value - (savedFY.value - savedTY.value) * r;
-        runOnJS(setZoomV)(nz);
+
+      const dampened = Math.pow(e.scale, 0.5);
+
+      if (pinchAxis.value === 1) {
+        // Horizontal zoom
+        const newZH = Math.min(4.0, Math.max(1.0, pinchStartZH.value * dampened));
+        const ratio = newZH / pinchStartZH.value;
+        // Anchor-point: keep content under focal point stationary
+        let newOX = pinchFocalX.value - (pinchFocalX.value - pinchStartOX.value) * ratio;
+        // Clamp to bounds at new zoom
+        const cw = sv_totalCols.value * Math.max(20, Math.round(sv_baseCellW.value * newZH));
+        const minX = Math.min(0, sv_viewW.value - cw);
+        newOX = Math.max(minX, Math.min(0, newOX));
+        offsetX.value = newOX;
+        zoomH.value = newZH;
+        runOnJS(persistZoom)(newZH, zoomV.value);
+      } else if (pinchAxis.value === 2) {
+        // Vertical zoom
+        const newZV = Math.min(3.0, Math.max(0.6, pinchStartZV.value * dampened));
+        const ratio = newZV / pinchStartZV.value;
+        let newOY = pinchFocalY.value - (pinchFocalY.value - pinchStartOY.value) * ratio;
+        const ch = sv_totalRows.value * Math.max(14, Math.round(sv_baseCellH.value * newZV));
+        const minY = Math.min(0, sv_viewH.value - ch);
+        newOY = Math.max(minY, Math.min(0, newOY));
+        offsetY.value = newOY;
+        zoomV.value = newZV;
+        runOnJS(persistZoom)(zoomH.value, newZV);
       }
     })
-    .onEnd(() => { 'worklet'; isPinching.value = false; axis.value = 0; })
-    .onFinalize(() => { 'worklet'; isPinching.value = false; axis.value = 0; }),
+    .onEnd(() => { 'worklet'; isPinching.value = false; pinchAxis.value = 0; })
+    .onFinalize(() => { 'worklet'; isPinching.value = false; pinchAxis.value = 0; }),
   []);
 
   const gesture = useMemo(() => Gesture.Simultaneous(pan, pinch), []);
 
+  // ── Animated styles for 4-quadrant layout ──────────────────
   const gridStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }, { translateY: translateY.value }],
+    transform: [{ translateX: offsetX.value }, { translateY: offsetY.value }],
   }));
   const headerStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: translateX.value }],
+    transform: [{ translateX: offsetX.value }],
   }));
   const labelStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: translateY.value }],
+    transform: [{ translateY: offsetY.value }],
   }));
 
-  return { gesture, gridStyle, headerStyle, labelStyle, translateX, translateY, minTX, minTY, rollZoom, rollZoomV };
+  return {
+    gesture, gridStyle, headerStyle, labelStyle,
+    offsetX, offsetY, zoomH, zoomV,
+    sv_totalCols, sv_baseCellW, sv_totalRows, sv_baseCellH, sv_viewW, sv_viewH,
+    rollZoom, rollZoomV,
+  };
 }
 
 // ── Drum step sequencer ──────────────────────────────────────
@@ -163,6 +209,7 @@ function DrumGrid({ shape, color }) {
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const selectedNode = useStore(s => s.ui.selectedNodeIndex);
   const g = usePianoGestures();
+
   const sub = shape.subdivision || 1;
   const totalCols = shape.sides * sub;
   const labelW = 70;
@@ -174,13 +221,22 @@ function DrumGrid({ shape, color }) {
   const viewW = screenWidth - labelW;
   const viewH = screenHeight * 0.45 - headerH;
 
-  useEffect(() => { g.minTX.value = Math.min(0, viewW - totalCols * cellW); }, [totalCols, cellW, viewW]);
-  useEffect(() => { g.minTY.value = Math.min(0, viewH - slotLabels.length * cellH); }, [cellH, viewH]);
+  // Sync grid dimensions → shared values for worklet clamping
+  useEffect(() => { g.sv_totalCols.value = totalCols; }, [totalCols]);
+  useEffect(() => { g.sv_baseCellW.value = baseDrumW; }, [baseDrumW]);
+  useEffect(() => { g.sv_totalRows.value = slotLabels.length; }, [slotLabels.length]);
+  useEffect(() => { g.sv_baseCellH.value = 48; }, []);
+  useEffect(() => { g.sv_viewW.value = viewW; }, [viewW]);
+  useEffect(() => { g.sv_viewH.value = viewH; }, [viewH]);
 
-  // Reset position when shape changes
+  // Reset position on shape change
   const prevId = useRef(shape.id);
   useEffect(() => {
-    if (prevId.current !== shape.id) { prevId.current = shape.id; g.translateX.value = 0; g.translateY.value = 0; }
+    if (prevId.current !== shape.id) {
+      prevId.current = shape.id;
+      g.offsetX.value = 0;
+      g.offsetY.value = 0;
+    }
   }, [shape.id]);
 
   function toggleSlot(vi, si, slotIdx) {
@@ -207,8 +263,8 @@ function DrumGrid({ shape, color }) {
   return (
     <GestureDetector gesture={g.gesture}>
       <View style={styles.container}>
-        {/* Grid */}
-        <Animated.View style={[{ position: 'absolute', left: labelW, top: headerH, right: 0, bottom: 0, overflow: 'hidden' }]}>
+        {/* Grid content — scrolls both X and Y */}
+        <View style={[styles.clip, { left: labelW, top: headerH }]}>
           <Animated.View style={g.gridStyle}>
             {slotLabels.map((slot, slotIdx) => (
               <View key={`dr-${slotIdx}`} style={styles.row}>
@@ -220,7 +276,8 @@ function DrumGrid({ shape, color }) {
                     return (
                       <Pressable key={`dc-${vi}-${s}-${slotIdx}`}
                         style={[styles.drumCell, { width: cellW, height: cellH },
-                          s === 0 && vi > 0 && styles.groupStart, vi === selectedNode && styles.drumCellSelected]}
+                          s === 0 && vi > 0 && styles.groupStart,
+                          vi === selectedNode && styles.drumCellSelected]}
                         onPress={() => toggleSlot(vi, s, slotIdx)}>
                         <View style={[styles.drumDot, isActive ? { backgroundColor: color.main } : { backgroundColor: 'rgba(0,0,0,0.06)' }]} />
                       </Pressable>
@@ -230,9 +287,9 @@ function DrumGrid({ shape, color }) {
               </View>
             ))}
           </Animated.View>
-        </Animated.View>
-        {/* Headers */}
-        <Animated.View style={[{ position: 'absolute', left: labelW, top: 0, right: 0, height: headerH, overflow: 'hidden', backgroundColor: COLORS.panelBg, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.1)', zIndex: 2 }]}>
+        </View>
+        {/* Column headers — scrolls X, pinned Y */}
+        <View style={[styles.clip, styles.headerClip, { left: labelW, height: headerH }]}>
           <Animated.View style={[styles.headerRow, g.headerStyle]}>
             {Array.from({ length: shape.sides }).map((_, vi) =>
               Array.from({ length: sub }).map((_, s) => {
@@ -246,9 +303,9 @@ function DrumGrid({ shape, color }) {
               })
             )}
           </Animated.View>
-        </Animated.View>
-        {/* Labels */}
-        <Animated.View style={[{ position: 'absolute', left: 0, top: headerH, width: labelW, bottom: 0, overflow: 'hidden', backgroundColor: COLORS.panelBg, zIndex: 1 }]}>
+        </View>
+        {/* Row labels — scrolls Y, pinned X */}
+        <View style={[styles.clip, styles.labelClip, { top: headerH, width: labelW }]}>
           <Animated.View style={g.labelStyle}>
             {slotLabels.map((slot, slotIdx) => (
               <View key={`dl-${slotIdx}`} style={[styles.label, { width: labelW, height: cellH }]}>
@@ -256,8 +313,8 @@ function DrumGrid({ shape, color }) {
               </View>
             ))}
           </Animated.View>
-        </Animated.View>
-        {/* Corner */}
+        </View>
+        {/* Corner — fixed */}
         <View style={[styles.corner, { width: labelW, height: headerH }]}>
           <Text style={styles.cornerText}>Step</Text>
         </View>
@@ -287,24 +344,28 @@ function MelodicGrid({ shape, color }) {
   const viewW = screenWidth - labelW;
   const viewH = screenHeight * 0.45 - headerH;
 
-  // Sync bounds
-  useEffect(() => { g.minTX.value = Math.min(0, viewW - totalCols * cellW); }, [totalCols, cellW, viewW]);
-  useEffect(() => { g.minTY.value = Math.min(0, viewH - rows.length * cellH); }, [rows.length, cellH, viewH]);
+  // Sync grid dimensions → shared values for worklet clamping
+  useEffect(() => { g.sv_totalCols.value = totalCols; }, [totalCols]);
+  useEffect(() => { g.sv_baseCellW.value = baseCellW; }, [baseCellW]);
+  useEffect(() => { g.sv_totalRows.value = rows.length; }, [rows.length]);
+  useEffect(() => { g.sv_baseCellH.value = 28; }, []);
+  useEffect(() => { g.sv_viewW.value = viewW; }, [viewW]);
+  useEffect(() => { g.sv_viewH.value = viewH; }, [viewH]);
 
-  // ── Row windowing via useAnimatedReaction ──
+  // ── Row windowing ──────────────────────────────────────────
   const [scrollY, setScrollY] = useState(0);
-  const windowThreshold = useSharedValue(cellH * 2);
-  const lastWindowY = useSharedValue(0);
-  useEffect(() => { windowThreshold.value = Math.max(1, cellH * 2); }, [cellH]);
+  const _offsetY = g.offsetY;
+  const _thresholdSV = useSharedValue(Math.max(1, cellH * 2));
+  const _lastWinY = useSharedValue(0);
+  useEffect(() => { _thresholdSV.value = Math.max(1, cellH * 2); }, [cellH]);
 
-  const _translateY = g.translateY;
   useAnimatedReaction(
-    () => { 'worklet'; return _translateY.value; },
-    (ty) => {
+    () => { 'worklet'; return _offsetY.value; },
+    (oy, prevOy) => {
       'worklet';
-      const absY = Math.max(0, -ty);
-      if (Math.abs(absY - lastWindowY.value) > windowThreshold.value) {
-        lastWindowY.value = absY;
+      const absY = Math.max(0, -oy);
+      if (prevOy === null || Math.abs(absY - _lastWinY.value) > _thresholdSV.value) {
+        _lastWinY.value = absY;
         runOnJS(setScrollY)(absY);
       }
     }, []
@@ -316,7 +377,7 @@ function MelodicGrid({ shape, color }) {
   const topSpacer = firstVisible * cellH;
   const bottomSpacer = Math.max(0, (rows.length - lastVisible - 1) * cellH);
 
-  // ── Initial scroll to pitch area ──
+  // ── Initial scroll to shape's pitch area ──
   const hasScrolledInit = useRef(null);
   useEffect(() => {
     if (hasScrolledInit.current === shape.id || rows.length === 0) return;
@@ -332,15 +393,15 @@ function MelodicGrid({ shape, color }) {
       if (d < bestDist) { bestDist = d; targetIdx = i; }
     }
     const targetY = Math.max(0, targetIdx * cellH - cellH * 3);
-    g.translateY.value = -targetY;
-    lastWindowY.value = targetY;
+    g.offsetY.value = -targetY;
+    _lastWinY.value = targetY;
     setScrollY(targetY);
   }, [shape.id]);
 
-  // Reset X when shape changes
+  // Reset X on shape change
   const prevId = useRef(shape.id);
   useEffect(() => {
-    if (prevId.current !== shape.id) { prevId.current = shape.id; g.translateX.value = 0; }
+    if (prevId.current !== shape.id) { prevId.current = shape.id; g.offsetX.value = 0; }
   }, [shape.id]);
 
   function toggleMute(vi, si) {
@@ -357,8 +418,8 @@ function MelodicGrid({ shape, color }) {
   return (
     <GestureDetector gesture={g.gesture}>
       <View style={styles.container}>
-        {/* Grid */}
-        <Animated.View style={[{ position: 'absolute', left: labelW, top: headerH, right: 0, bottom: 0, overflow: 'hidden' }]}>
+        {/* Grid content — scrolls both X and Y */}
+        <View style={[styles.clip, { left: labelW, top: headerH }]}>
           <Animated.View style={g.gridStyle}>
             {topSpacer > 0 && <View style={{ height: topSpacer }} />}
             {visibleRows.map(pitch => {
@@ -385,9 +446,9 @@ function MelodicGrid({ shape, color }) {
             })}
             {bottomSpacer > 0 && <View style={{ height: bottomSpacer }} />}
           </Animated.View>
-        </Animated.View>
-        {/* Headers */}
-        <Animated.View style={[{ position: 'absolute', left: labelW, top: 0, right: 0, height: headerH, overflow: 'hidden', backgroundColor: COLORS.panelBg, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.1)', zIndex: 2 }]}>
+        </View>
+        {/* Column headers — scrolls X, pinned Y */}
+        <View style={[styles.clip, styles.headerClip, { left: labelW, height: headerH }]}>
           <Animated.View style={[styles.headerRow, g.headerStyle]}>
             {Array.from({ length: shape.sides }).map((_, vi) =>
               Array.from({ length: sub }).map((_, s) => {
@@ -409,9 +470,9 @@ function MelodicGrid({ shape, color }) {
               })
             )}
           </Animated.View>
-        </Animated.View>
-        {/* Labels */}
-        <Animated.View style={[{ position: 'absolute', left: 0, top: headerH, width: labelW, bottom: 0, overflow: 'hidden', backgroundColor: COLORS.panelBg, zIndex: 1 }]}>
+        </View>
+        {/* Row labels — scrolls Y, pinned X */}
+        <View style={[styles.clip, styles.labelClip, { top: headerH, width: labelW }]}>
           <Animated.View style={g.labelStyle}>
             {topSpacer > 0 && <View style={{ height: topSpacer }} />}
             {visibleRows.map(pitch => {
@@ -425,8 +486,8 @@ function MelodicGrid({ shape, color }) {
             })}
             {bottomSpacer > 0 && <View style={{ height: bottomSpacer }} />}
           </Animated.View>
-        </Animated.View>
-        {/* Corner */}
+        </View>
+        {/* Corner — fixed */}
         <View style={[styles.corner, { width: labelW, height: headerH }]}>
           <Text style={styles.cornerText}>Edit</Text>
         </View>
@@ -437,6 +498,9 @@ function MelodicGrid({ shape, color }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  clip: { position: 'absolute', right: 0, bottom: 0, overflow: 'hidden' },
+  headerClip: { top: 0, bottom: undefined, backgroundColor: COLORS.panelBg, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.1)', zIndex: 2 },
+  labelClip: { left: 0, right: undefined, backgroundColor: COLORS.panelBg, zIndex: 1 },
   headerRow: { flexDirection: 'row' },
   colHeader: { justifyContent: 'center', alignItems: 'center', gap: 2, borderRightWidth: StyleSheet.hairlineWidth, borderRightColor: 'rgba(0,0,0,0.06)' },
   colHeaderSelected: { backgroundColor: 'rgba(0,0,0,0.04)' },
