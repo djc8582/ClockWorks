@@ -72,9 +72,15 @@ function usePianoGestures() {
   // Position
   const offsetX = useSharedValue(0);
   const offsetY = useSharedValue(0);
-  // Zoom on UI thread
+  // Zoom on UI thread (live — set by worklet during pinch)
   const zoomH = useSharedValue(rollZoom);
   const zoomV = useSharedValue(rollZoomV);
+  // React-committed zoom (follows React state, for scale transform ratio)
+  const reactZoomH = useSharedValue(rollZoom);
+  const reactZoomV = useSharedValue(rollZoomV);
+  // Sync immediately on every render to avoid 1-frame lag vs useEffect
+  reactZoomH.value = rollZoom;
+  reactZoomV.value = rollZoomV;
   // Pinch state
   const isPinching = useSharedValue(false);
   const wasPinching = useSharedValue(false); // for post-pinch drag
@@ -227,15 +233,32 @@ function usePianoGestures() {
 
   const gesture = useMemo(() => Gesture.Simultaneous(pan, pinch), []);
 
-  // ── Animated styles for 4-quadrant layout ──────────────────
+  // ── Animated styles with scale compensation ─────────────────
+  // During pinch, zoomH/V (worklet) lead reactZoomH/V (React state).
+  // The scale transform bridges the 1-frame gap so visual zoom is instant
+  // while cellH catches up asynchronously via React re-render.
   const gridStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: offsetX.value }, { translateY: offsetY.value }],
+    transform: [
+      { translateX: offsetX.value },
+      { translateY: offsetY.value },
+      { scaleX: zoomH.value / reactZoomH.value },
+      { scaleY: zoomV.value / reactZoomV.value },
+    ],
+    transformOrigin: 'left top',
   }));
   const headerStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: offsetX.value }],
+    transform: [
+      { translateX: offsetX.value },
+      { scaleX: zoomH.value / reactZoomH.value },
+    ],
+    transformOrigin: 'left top',
   }));
   const labelStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: offsetY.value }],
+    transform: [
+      { translateY: offsetY.value },
+      { scaleY: zoomV.value / reactZoomV.value },
+    ],
+    transformOrigin: 'left top',
   }));
 
   return {
