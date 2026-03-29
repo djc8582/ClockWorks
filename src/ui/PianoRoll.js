@@ -87,13 +87,18 @@ function usePianoGestures() {
   // Pan tracking
   const panStartOX = useSharedValue(0);
   const panStartOY = useSharedValue(0);
+  // Pan recalibration after pinch→pan transition
+  const needsPanRecal = useSharedValue(false);
   // Grid dimensions for worklet clamping (synced from React)
   const sv_totalCols = useSharedValue(1);
   const sv_baseCellW = useSharedValue(40);
   const sv_totalRows = useSharedValue(1);
   const sv_baseCellH = useSharedValue(28);
+  const sv_minCellH = useSharedValue(14);
   const sv_viewW = useSharedValue(300);
   const sv_viewH = useSharedValue(300);
+  const sv_labelW = useSharedValue(42);
+  const sv_headerH = useSharedValue(44);
 
   // Sync zoom: React state → shared values
   useEffect(() => { zoomH.value = rollZoom; }, [rollZoom]);
@@ -109,10 +114,15 @@ function usePianoGestures() {
     })
     .onUpdate((e) => {
       'worklet';
-      // Only single-finger pan, not during pinch
       if (e.numberOfPointers !== 1 || isPinching.value) return;
+      // After pinch→pan transition, recalibrate so panStart + translation = current offset
+      if (needsPanRecal.value) {
+        panStartOX.value = offsetX.value - e.translationX;
+        panStartOY.value = offsetY.value - e.translationY;
+        needsPanRecal.value = false;
+      }
       const cw = sv_totalCols.value * Math.max(20, Math.round(sv_baseCellW.value * zoomH.value));
-      const ch = sv_totalRows.value * Math.max(14, Math.round(sv_baseCellH.value * zoomV.value));
+      const ch = sv_totalRows.value * Math.max(sv_minCellH.value, Math.round(sv_baseCellH.value * zoomV.value));
       const minX = Math.min(0, sv_viewW.value - cw);
       const minY = Math.min(0, sv_viewH.value - ch);
       offsetX.value = Math.max(minX, Math.min(0, panStartOX.value + e.translationX));
@@ -129,8 +139,9 @@ function usePianoGestures() {
         const dx = Math.abs(t[0].x - t[1].x);
         const dy = Math.abs(t[0].y - t[1].y);
         pinchAxis.value = dx > dy ? 1 : 2;
-        pinchFocalX.value = (t[0].x + t[1].x) / 2;
-        pinchFocalY.value = (t[0].y + t[1].y) / 2;
+        // Focal point in grid-viewport coords (subtract label/header offset)
+        pinchFocalX.value = (t[0].x + t[1].x) / 2 - sv_labelW.value;
+        pinchFocalY.value = (t[0].y + t[1].y) / 2 - sv_headerH.value;
       }
     })
     .onStart(() => {
@@ -142,11 +153,10 @@ function usePianoGestures() {
     })
     .onUpdate((e) => {
       'worklet';
-      // Finger lifted mid-pinch → allow pan to resume
+      // Finger lifted mid-pinch → flag recalibration for seamless pan transition
       if (e.numberOfPointers === 1 && isPinching.value) {
         isPinching.value = false;
-        panStartOX.value = offsetX.value;
-        panStartOY.value = offsetY.value;
+        needsPanRecal.value = true;
         return;
       }
       if (e.numberOfPointers !== 2) return;
@@ -171,7 +181,7 @@ function usePianoGestures() {
         const newZV = Math.min(3.0, Math.max(0.6, pinchStartZV.value * dampened));
         const ratio = newZV / pinchStartZV.value;
         let newOY = pinchFocalY.value - (pinchFocalY.value - pinchStartOY.value) * ratio;
-        const ch = sv_totalRows.value * Math.max(14, Math.round(sv_baseCellH.value * newZV));
+        const ch = sv_totalRows.value * Math.max(sv_minCellH.value, Math.round(sv_baseCellH.value * newZV));
         const minY = Math.min(0, sv_viewH.value - ch);
         newOY = Math.max(minY, Math.min(0, newOY));
         offsetY.value = newOY;
@@ -199,7 +209,8 @@ function usePianoGestures() {
   return {
     gesture, gridStyle, headerStyle, labelStyle,
     offsetX, offsetY, zoomH, zoomV,
-    sv_totalCols, sv_baseCellW, sv_totalRows, sv_baseCellH, sv_viewW, sv_viewH,
+    sv_totalCols, sv_baseCellW, sv_totalRows, sv_baseCellH, sv_minCellH, sv_viewW, sv_viewH,
+    sv_labelW, sv_headerH,
     rollZoom, rollZoomV,
   };
 }
@@ -226,8 +237,11 @@ function DrumGrid({ shape, color }) {
   useEffect(() => { g.sv_baseCellW.value = baseDrumW; }, [baseDrumW]);
   useEffect(() => { g.sv_totalRows.value = slotLabels.length; }, [slotLabels.length]);
   useEffect(() => { g.sv_baseCellH.value = 48; }, []);
+  useEffect(() => { g.sv_minCellH.value = 1; }, []); // drums have no min cell height
   useEffect(() => { g.sv_viewW.value = viewW; }, [viewW]);
   useEffect(() => { g.sv_viewH.value = viewH; }, [viewH]);
+  useEffect(() => { g.sv_labelW.value = labelW; }, []);
+  useEffect(() => { g.sv_headerH.value = headerH; }, [headerH]);
 
   // Reset position on shape change
   const prevId = useRef(shape.id);
@@ -349,8 +363,11 @@ function MelodicGrid({ shape, color }) {
   useEffect(() => { g.sv_baseCellW.value = baseCellW; }, [baseCellW]);
   useEffect(() => { g.sv_totalRows.value = rows.length; }, [rows.length]);
   useEffect(() => { g.sv_baseCellH.value = 28; }, []);
+  useEffect(() => { g.sv_minCellH.value = 14; }, []); // melodic min cell height
   useEffect(() => { g.sv_viewW.value = viewW; }, [viewW]);
   useEffect(() => { g.sv_viewH.value = viewH; }, [viewH]);
+  useEffect(() => { g.sv_labelW.value = labelW; }, []);
+  useEffect(() => { g.sv_headerH.value = headerH; }, [headerH]);
 
   // ── Row windowing ──────────────────────────────────────────
   const [scrollY, setScrollY] = useState(0);
