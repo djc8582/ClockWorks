@@ -237,29 +237,45 @@ function usePianoGestures() {
   // During pinch, zoomH/V (worklet) lead reactZoomH/V (React state).
   // The scale transform bridges the 1-frame gap so visual zoom is instant
   // while cellH catches up asynchronously via React re-render.
-  const gridStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: offsetX.value },
-      { translateY: offsetY.value },
-      { scaleX: zoomH.value / reactZoomH.value },
-      { scaleY: zoomV.value / reactZoomV.value },
-    ],
-    transformOrigin: 'left top',
-  }));
-  const headerStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateX: offsetX.value },
-      { scaleX: zoomH.value / reactZoomH.value },
-    ],
-    transformOrigin: 'left top',
-  }));
-  const labelStyle = useAnimatedStyle(() => ({
-    transform: [
-      { translateY: offsetY.value },
-      { scaleY: zoomV.value / reactZoomV.value },
-    ],
-    transformOrigin: 'left top',
-  }));
+  // Default transform origin is center, so we offset to simulate top-left:
+  //   adjustedTranslate = translate + contentSize/2 * (1 - scale)
+  const gridStyle = useAnimatedStyle(() => {
+    'worklet';
+    const sx = zoomH.value / reactZoomH.value;
+    const sy = zoomV.value / reactZoomV.value;
+    const cw = sv_totalCols.value * Math.max(20, Math.round(sv_baseCellW.value * reactZoomH.value));
+    const ch = sv_totalRows.value * Math.max(sv_minCellH.value, Math.round(sv_baseCellH.value * reactZoomV.value));
+    return {
+      transform: [
+        { translateX: offsetX.value + cw / 2 * (1 - sx) },
+        { translateY: offsetY.value + ch / 2 * (1 - sy) },
+        { scaleX: sx },
+        { scaleY: sy },
+      ],
+    };
+  });
+  const headerStyle = useAnimatedStyle(() => {
+    'worklet';
+    const sx = zoomH.value / reactZoomH.value;
+    const cw = sv_totalCols.value * Math.max(20, Math.round(sv_baseCellW.value * reactZoomH.value));
+    return {
+      transform: [
+        { translateX: offsetX.value + cw / 2 * (1 - sx) },
+        { scaleX: sx },
+      ],
+    };
+  });
+  const labelStyle = useAnimatedStyle(() => {
+    'worklet';
+    const sy = zoomV.value / reactZoomV.value;
+    const ch = sv_totalRows.value * Math.max(sv_minCellH.value, Math.round(sv_baseCellH.value * reactZoomV.value));
+    return {
+      transform: [
+        { translateY: offsetY.value + ch / 2 * (1 - sy) },
+        { scaleY: sy },
+      ],
+    };
+  });
 
   return {
     gesture, gridStyle, headerStyle, labelStyle,
