@@ -69,14 +69,15 @@ function usePianoGestures() {
   const rollZoom = useStore(s => s.ui.rollZoom || 1.0);
   const rollZoomV = useStore(s => s.ui.rollZoomV || 1.0);
 
-  // Scroll position (≤ 0)
+  // Position
   const offsetX = useSharedValue(0);
   const offsetY = useSharedValue(0);
   // Zoom on UI thread
   const zoomH = useSharedValue(rollZoom);
   const zoomV = useSharedValue(rollZoomV);
-  // Pinch tracking
+  // Pinch state
   const isPinching = useSharedValue(false);
+  const wasPinching = useSharedValue(false); // for post-pinch drag
   const pinchAxis = useSharedValue(0); // 0=none, 1=H, 2=V
   const pinchFocalX = useSharedValue(0);
   const pinchFocalY = useSharedValue(0);
@@ -84,11 +85,12 @@ function usePianoGestures() {
   const pinchStartOY = useSharedValue(0);
   const pinchStartZH = useSharedValue(1);
   const pinchStartZV = useSharedValue(1);
-  // Pan tracking
+  // Post-pinch drag tracking
+  const lastFocalX = useSharedValue(0);
+  const lastFocalY = useSharedValue(0);
+  // Pan state
   const panStartOX = useSharedValue(0);
   const panStartOY = useSharedValue(0);
-  // Pan recalibration after pinch→pan transition
-  const needsPanRecal = useSharedValue(false);
   // Grid dimensions for worklet clamping (synced from React)
   const sv_totalCols = useSharedValue(1);
   const sv_baseCellW = useSharedValue(40);
@@ -104,9 +106,22 @@ function usePianoGestures() {
   useEffect(() => { zoomH.value = rollZoom; }, [rollZoom]);
   useEffect(() => { zoomV.value = rollZoomV; }, [rollZoomV]);
 
+  // Worklet clamp helpers
+  function clampX(x) {
+    'worklet';
+    const cw = sv_totalCols.value * Math.max(20, Math.round(sv_baseCellW.value * zoomH.value));
+    return Math.max(Math.min(0, sv_viewW.value - cw), Math.min(0, x));
+  }
+  function clampY(y) {
+    'worklet';
+    const ch = sv_totalRows.value * Math.max(sv_minCellH.value, Math.round(sv_baseCellH.value * zoomV.value));
+    return Math.max(Math.min(0, sv_viewH.value - ch), Math.min(0, y));
+  }
+
   // ── Pan gesture ────────────────────────────────────────────
   const pan = useMemo(() => Gesture.Pan()
-    .minDistance(10)
+    .maxPointers(1)  // NEVER fires for 2+ fingers — prevents scroll during pinch
+    .minDistance(5)   // responsive but won't steal taps
     .onStart(() => {
       'worklet';
       panStartOX.value = offsetX.value;
@@ -114,19 +129,8 @@ function usePianoGestures() {
     })
     .onUpdate((e) => {
       'worklet';
-      if (e.numberOfPointers !== 1 || isPinching.value) return;
-      // After pinch→pan transition, recalibrate so panStart + translation = current offset
-      if (needsPanRecal.value) {
-        panStartOX.value = offsetX.value - e.translationX;
-        panStartOY.value = offsetY.value - e.translationY;
-        needsPanRecal.value = false;
-      }
-      const cw = sv_totalCols.value * Math.max(20, Math.round(sv_baseCellW.value * zoomH.value));
-      const ch = sv_totalRows.value * Math.max(sv_minCellH.value, Math.round(sv_baseCellH.value * zoomV.value));
-      const minX = Math.min(0, sv_viewW.value - cw);
-      const minY = Math.min(0, sv_viewH.value - ch);
-      offsetX.value = Math.max(minX, Math.min(0, panStartOX.value + e.translationX));
-      offsetY.value = Math.max(minY, Math.min(0, panStartOY.value + e.translationY));
+      offsetX.value = clampX(panStartOX.value + e.translationX);
+      offsetY.value = clampY(panStartOY.value + e.translationY);
     }), []);
 
   // ── Pinch gesture ──────────────────────────────────────────
@@ -135,11 +139,16 @@ function usePianoGestures() {
       'worklet';
       if (e.numberOfTouches >= 2) {
         isPinching.value = true;
+        wasPinching.value = true;
         const t = e.allTouches;
         const dx = Math.abs(t[0].x - t[1].x);
         const dy = Math.abs(t[0].y - t[1].y);
-        pinchAxis.value = dx > dy ? 1 : 2;
-        // Focal point in grid-viewport coords (subtract label/header offset)
+        // Axis detection with dead zone
+        const ratio = dx / (dy + 0.001);
+        if (ratio > 1.5) pinchAxis.value = 1;        // clearly horizontal
+        else if (ratio < 0.67) pinchAxis.value = 2;   // clearly vertical
+        else pinchAxis.value = 1;                      // ambiguous → default horizontal
+        // Focal point in GRID VIEWPORT coordinates
         pinchFocalX.value = (t[0].x + t[1].x) / 2 - sv_labelW.value;
         pinchFocalY.value = (t[0].y + t[1].y) / 2 - sv_headerH.value;
       }
@@ -153,23 +162,36 @@ function usePianoGestures() {
     })
     .onUpdate((e) => {
       'worklet';
-      // Finger lifted mid-pinch → flag recalibration for seamless pan transition
-      if (e.numberOfPointers === 1 && isPinching.value) {
-        isPinching.value = false;
-        needsPanRecal.value = true;
+      if (e.numberOfPointers === 1) {
+        // Post-pinch single-finger drag
+        if (isPinching.value) {
+          // First frame after finger lift — just capture position, don't move
+          isPinching.value = false;
+          lastFocalX.value = e.focalX;
+          lastFocalY.value = e.focalY;
+          return;
+        }
+        if (wasPinching.value) {
+          // Subsequent frames — drag via focal delta
+          const fdx = e.focalX - lastFocalX.value;
+          const fdy = e.focalY - lastFocalY.value;
+          lastFocalX.value = e.focalX;
+          lastFocalY.value = e.focalY;
+          offsetX.value = clampX(offsetX.value + fdx);
+          offsetY.value = clampY(offsetY.value + fdy);
+        }
         return;
       }
       if (e.numberOfPointers !== 2) return;
 
-      const dampened = Math.pow(e.scale, 0.5);
+      const dampened = Math.pow(e.scale, 0.65); // more responsive than 0.5
 
       if (pinchAxis.value === 1) {
         // Horizontal zoom
         const newZH = Math.min(4.0, Math.max(1.0, pinchStartZH.value * dampened));
-        const ratio = newZH / pinchStartZH.value;
+        const zRatio = newZH / pinchStartZH.value;
         // Anchor-point: keep content under focal point stationary
-        let newOX = pinchFocalX.value - (pinchFocalX.value - pinchStartOX.value) * ratio;
-        // Clamp to bounds at new zoom
+        let newOX = pinchFocalX.value - (pinchFocalX.value - pinchStartOX.value) * zRatio;
         const cw = sv_totalCols.value * Math.max(20, Math.round(sv_baseCellW.value * newZH));
         const minX = Math.min(0, sv_viewW.value - cw);
         newOX = Math.max(minX, Math.min(0, newOX));
@@ -179,8 +201,8 @@ function usePianoGestures() {
       } else if (pinchAxis.value === 2) {
         // Vertical zoom
         const newZV = Math.min(3.0, Math.max(0.6, pinchStartZV.value * dampened));
-        const ratio = newZV / pinchStartZV.value;
-        let newOY = pinchFocalY.value - (pinchFocalY.value - pinchStartOY.value) * ratio;
+        const zRatio = newZV / pinchStartZV.value;
+        let newOY = pinchFocalY.value - (pinchFocalY.value - pinchStartOY.value) * zRatio;
         const ch = sv_totalRows.value * Math.max(sv_minCellH.value, Math.round(sv_baseCellH.value * newZV));
         const minY = Math.min(0, sv_viewH.value - ch);
         newOY = Math.max(minY, Math.min(0, newOY));
@@ -189,8 +211,18 @@ function usePianoGestures() {
         runOnJS(persistZoom)(zoomH.value, newZV);
       }
     })
-    .onEnd(() => { 'worklet'; isPinching.value = false; pinchAxis.value = 0; })
-    .onFinalize(() => { 'worklet'; isPinching.value = false; pinchAxis.value = 0; }),
+    .onEnd(() => {
+      'worklet';
+      isPinching.value = false;
+      wasPinching.value = false;
+      pinchAxis.value = 0;
+    })
+    .onFinalize(() => {
+      'worklet';
+      isPinching.value = false;
+      wasPinching.value = false;
+      pinchAxis.value = 0;
+    }),
   []);
 
   const gesture = useMemo(() => Gesture.Simultaneous(pan, pinch), []);
