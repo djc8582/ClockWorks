@@ -1,8 +1,8 @@
 import { AudioContext } from 'react-native-audio-api';
 import { AppState } from 'react-native';
 import { getState, getShapes, updateState } from '../state.js';
-import { TIMING } from '../constants.js';
-import { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices } from './timbres.js';
+import { TIMING, AUDIO, makeDefaultFx, makeDefaultMasterFx } from '../constants.js';
+import { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices, getActiveVoiceCount, getMaxVoices } from './timbres.js';
 import { createScheduler } from './scheduler.js';
 
 let audioContext = null;
@@ -12,12 +12,67 @@ let cycleDuration = 2;
 let masterGain = null;
 let synthMap = new Map();
 let onNoteTriggered = null;
+let sceneProvider = null; // cycle number → scene index (set by sequencer)
 let masterGainValue = 0.7;  // Track gain in JS to avoid .value getter issues
 let appStateSubscription = null;
 let rescheduleThrottleId = null;
 const MAX_NOTES_PER_TICK = 12;
 
+// ── Effects graph ────────────────────────────────────────────
+// Per-shape channel strips + two shared send buses + master chain.
+// Built only from Gain / BiquadFilter / StereoPanner — the proven-stable
+// nodes on react-native-audio-api 0.6.5.
+//
+//  voices → ch.input(vol) → ch.filter(tone) → ch.panner(pan) → masterInput
+//                                   └→ (sends are applied per scheduled tap)
+//  echo taps  → echoPanL/echoPanR (ping-pong) → echoTone → echoLevel → masterInput
+//  verb taps  → verbIn → verbTone → verbLevel → masterInput
+//  masterInput(headroom × master volume) → masterTone → destination
+let masterTone = null;
+let echoPanL = null, echoPanR = null, echoTone = null, echoLevel = null;
+let verbIn = null, verbTone = null, verbLevel = null;
+const channels = new Map(); // shape.id → { input, filter, panner }
+
+// tone 0..1 → cutoff Hz on a log scale
+function toneToHz(t, lo = 300, hi = 18000) {
+  const x = Math.max(0, Math.min(1, Number(t) ?? 1));
+  return lo * Math.pow(hi / lo, x);
+}
+
+// res 0..1 → biquad Q: Butterworth-flat at 0, screaming at 1
+function resToQ(r) {
+  const x = Math.max(0, Math.min(1, Number(r) || 0));
+  return 0.707 + x * 7.3;
+}
+
+// Shape filter cutoff (with legacy 'tone' fallback) — 80Hz..18kHz so
+// highpass sweeps have somewhere to live
+function shapeCutoffHz(fx) {
+  const c = fx.cutoff !== undefined ? fx.cutoff : (fx.tone !== undefined ? fx.tone : 1);
+  return toneToHz(c, 80, 18000);
+}
+
+function getMasterFx() {
+  const s = getState();
+  return { ...makeDefaultMasterFx(), ...((s && s.effects) || {}) };
+}
+
+function getShapeFx(shape) {
+  return { ...makeDefaultFx(), ...((shape && shape.fx) || {}) };
+}
+
 function setNoteCallback(cb) { onNoteTriggered = cb; }
+function setSceneProvider(fn) { sceneProvider = fn; }
+
+// resume()/suspend()/close() return promises on react-native-audio-api —
+// a bare try/catch misses async rejections, which surface as unhandled
+// promise rejections. This guards both sync throws and rejections.
+function safeAudioOp(fn) {
+  try {
+    const p = fn();
+    if (p && typeof p.catch === 'function') p.catch(() => {});
+  } catch (e) {}
+}
 
 function velocityToGain(velocity) {
   const v = Number(velocity) || 85;
@@ -36,16 +91,61 @@ function getNoteDuration(shape) {
 // ── Init ─────────────────────────────────────────────────────
 // Called during loading screen — creates AudioContext and loads all samples.
 // Returns a promise that resolves when everything is ready to play.
-async function initAudio() {
-  if (audioInitialized) return;
+let initPromise = null;
 
+function initAudio() {
+  if (audioInitialized) return Promise.resolve();
+  // Idempotent: concurrent callers (loading screen + first-play retry)
+  // share one in-flight attempt
+  if (!initPromise) {
+    initPromise = doInitAudio().finally(() => { initPromise = null; });
+  }
+  return initPromise;
+}
+
+async function doInitAudio() {
   try {
     audioContext = new AudioContext();
-    try { audioContext.resume(); } catch (e) {}
+    safeAudioOp(() => audioContext.resume());
 
+    // Master chain: masterGain (auto-headroom × user volume) → masterTone → out
     masterGain = audioContext.createGain();
     masterGain.gain.value = 0.7;
-    masterGain.connect(audioContext.destination);
+    masterTone = audioContext.createBiquadFilter();
+    masterTone.type = 'lowpass';
+    masterTone.frequency.value = toneToHz(1);
+    masterTone.Q.value = 0.707; // Butterworth — flat response, no resonance (tiny Q makes biquads degenerate/crunchy)
+    masterGain.connect(masterTone);
+    masterTone.connect(audioContext.destination);
+
+    // Echo bus: ping-pong panners → darkening filter → return level → master
+    echoPanL = audioContext.createStereoPanner();
+    echoPanL.pan.value = -0.7;
+    echoPanR = audioContext.createStereoPanner();
+    echoPanR.pan.value = 0.7;
+    echoTone = audioContext.createBiquadFilter();
+    echoTone.type = 'lowpass';
+    echoTone.frequency.value = 5000;
+    echoTone.Q.value = 0.707; // Butterworth — flat response, no resonance (tiny Q makes biquads degenerate/crunchy)
+    echoLevel = audioContext.createGain();
+    echoLevel.gain.value = makeDefaultMasterFx().delayWet;
+    echoPanL.connect(echoTone);
+    echoPanR.connect(echoTone);
+    echoTone.connect(echoLevel);
+    echoLevel.connect(masterGain);
+
+    // Reverb bus: diffuse taps in → dark filter → return level → master
+    verbIn = audioContext.createGain();
+    verbIn.gain.value = 1;
+    verbTone = audioContext.createBiquadFilter();
+    verbTone.type = 'lowpass';
+    verbTone.frequency.value = 3200;
+    verbTone.Q.value = 0.707; // Butterworth — flat response, no resonance (tiny Q makes biquads degenerate/crunchy)
+    verbLevel = audioContext.createGain();
+    verbLevel.gain.value = makeDefaultMasterFx().reverbWet;
+    verbIn.connect(verbTone);
+    verbTone.connect(verbLevel);
+    verbLevel.connect(masterGain);
 
     // Wait for ALL samples to be decoded before marking as ready
     await initSampleBank(audioContext);
@@ -53,10 +153,11 @@ async function initAudio() {
     updateCycleDuration();
     scheduler = createScheduler(audioContext, cycleDuration, onSchedulerTick);
     audioInitialized = true;
+    applyMasterFx(); // apply persisted master effects (loaded projects)
 
     // Suspend immediately — we'll resume when the user taps play.
     // This prevents the context from auto-playing before the user interacts.
-    try { audioContext.suspend(); } catch (e) {}
+    safeAudioOp(() => audioContext.suspend());
 
     // Background/foreground handling
     if (!appStateSubscription) {
@@ -64,19 +165,22 @@ async function initAudio() {
         if (!audioInitialized) return;
         if (nextState === 'background' || nextState === 'inactive') {
           if (scheduler) scheduler.stop();
-          try { if (audioContext) audioContext.suspend(); } catch (e) {}
+          safeAudioOp(() => { if (audioContext) return audioContext.suspend(); });
         } else if (nextState === 'active') {
-          try {
-            if (audioContext && audioContext.state !== 'running') audioContext.resume();
-          } catch (e) {}
-          if (getState().ui.playing && scheduler) scheduler.resume();
+          // Only reactivate the audio session if the user was actually playing
+          if (getState().ui.playing) {
+            safeAudioOp(() => {
+              if (audioContext && audioContext.state !== 'running') return audioContext.resume();
+            });
+            if (scheduler) scheduler.resume();
+          }
         }
       });
     }
   } catch (e) {
     if (__DEV__) console.warn('[audio] Init failed:', e?.message || e);
     if (audioContext) {
-      try { audioContext.close(); } catch (e2) {}
+      safeAudioOp(() => audioContext.close());
       audioContext = null;
     }
     masterGain = null;
@@ -86,8 +190,18 @@ async function initAudio() {
 
 // Called when user taps play — resumes context and starts scheduler instantly.
 function startPlayback() {
-  if (!audioInitialized || !audioContext || !scheduler) return;
-  try { audioContext.resume(); } catch (e) {}
+  if (!audioInitialized || !audioContext || !scheduler) {
+    // Init failed during the loading screen (rare) — retry once in the
+    // background and start playback when it lands, if still requested.
+    initAudio().then(() => {
+      if (audioInitialized && audioContext && scheduler && getState().ui.playing) {
+        safeAudioOp(() => audioContext.resume());
+        scheduler.start();
+      }
+    }).catch(() => {});
+    return;
+  }
+  safeAudioOp(() => audioContext.resume());
   scheduler.start();
 }
 
@@ -102,7 +216,8 @@ function updateCycleDuration() {
 function getCycleDuration() { return cycleDuration; }
 
 function updateBPM(newBPM) {
-  updateState(s => { s.bpm = newBPM; });
+  const clamped = Math.max(AUDIO.minBpm, Math.min(AUDIO.maxBpm, Math.round(Number(newBPM) || 120)));
+  updateState(s => { s.bpm = clamped; });
   updateCycleDuration();
   rescheduleAll();
 }
@@ -130,42 +245,168 @@ function cleanupOrphanedSynths() {
   for (const t of toDelete) synthMap.delete(t);
 }
 
+// ── Per-shape channel strips ─────────────────────────────────
+function getChannel(shape) {
+  if (!audioContext || !masterGain) return null;
+  let ch = channels.get(shape.id);
+  if (!ch) {
+    try {
+      const fx = getShapeFx(shape);
+      const input = audioContext.createGain();
+      input.gain.value = shape.volume != null ? shape.volume : 1;
+      const filter = audioContext.createBiquadFilter();
+      filter.type = fx.filterType || 'lowpass';
+      filter.frequency.value = shapeCutoffHz(fx);
+      filter.Q.value = resToQ(fx.res); // 0.707 floor — tiny Q makes biquads degenerate/crunchy
+      const panner = audioContext.createStereoPanner();
+      panner.pan.value = fx.pan;
+      input.connect(filter);
+      filter.connect(panner);
+      panner.connect(masterGain);
+      ch = { input, filter, panner };
+      channels.set(shape.id, ch);
+    } catch (e) {
+      return null;
+    }
+  }
+  return ch;
+}
+
+// Smoothly apply a shape's live mixer params to its strip
+function applyChannelFx(shape) {
+  const ch = channels.get(shape.id);
+  if (!ch || !audioContext) return;
+  const fx = getShapeFx(shape);
+  const now = audioContext.currentTime;
+  try {
+    const vol = shape.volume != null ? shape.volume : 1;
+    ch.input.gain.setValueAtTime(ch.input.gain.value, now);
+    ch.input.gain.linearRampToValueAtTime(vol, now + 0.04);
+    const type = fx.filterType || 'lowpass';
+    if (ch.filter.type !== type) ch.filter.type = type; // discrete — no ramp
+    ch.filter.frequency.setValueAtTime(ch.filter.frequency.value, now);
+    ch.filter.frequency.linearRampToValueAtTime(shapeCutoffHz(fx), now + 0.04);
+    ch.filter.Q.setValueAtTime(ch.filter.Q.value, now);
+    ch.filter.Q.linearRampToValueAtTime(resToQ(fx.res), now + 0.04);
+    ch.panner.pan.setValueAtTime(ch.panner.pan.value, now);
+    ch.panner.pan.linearRampToValueAtTime(Math.max(-1, Math.min(1, fx.pan)), now + 0.04);
+  } catch (e) {}
+}
+
+// Channels for shapes that no longer exist in ANY scene get torn down
+function cleanupOrphanedChannels() {
+  const state = getState();
+  const liveIds = new Set();
+  if (state && state.scenes) {
+    for (const scene of state.scenes) {
+      for (const sh of (scene.shapes || [])) liveIds.add(sh.id);
+    }
+  }
+  for (const [id, ch] of channels) {
+    if (liveIds.has(id)) continue;
+    channels.delete(id);
+    try { ch.panner.disconnect(); } catch (e) {}
+    try { ch.filter.disconnect(); } catch (e) {}
+    try { ch.input.disconnect(); } catch (e) {}
+  }
+}
+
+// ── Note + effect-tap scheduling ─────────────────────────────
+// The echo bus is fed by SCHEDULED copies of each note (no DelayNode on
+// 0.6.5): up to 3 decaying taps alternating L/R = sample-accurate
+// ping-pong. Reverb is 4 diffuse taps into a dark bus. Taps are skipped
+// under voice-pool pressure so extreme tempos degrade gracefully.
+const VERB_TAPS = [0.029, 0.061, 0.097, 0.141];
+
+function scheduleVoice(shape, synth, stepData, vel, dur, when, vertexIndex) {
+  const ch = getChannel(shape);
+  if (!ch) return;
+  const fx = getShapeFx(shape);
+  try {
+    triggerTimbre(audioContext, ch.input, synth, stepData, vel, dur, when, vertexIndex, fx.drive);
+  } catch (e) {}
+
+  const pressureOk = getActiveVoiceCount() < getMaxVoices() * 0.7;
+  if (!pressureOk) return;
+  const base = when != null ? when : audioContext.currentTime;
+
+  if (fx.echoSend > 0.01 && echoPanL) {
+    const m = getMasterFx();
+    const fb = Math.max(0, Math.min(0.85, m.delayFeedback));
+    const dt = Math.max(0.05, Math.min(0.7, m.delayTime));
+    let g = vel * fx.echoSend;
+    for (let k = 1; k <= 3; k++) {
+      g *= fb;
+      if (g < 0.012) break;
+      const dest = (k % 2 === 1) ? echoPanL : echoPanR;
+      try { triggerTimbre(audioContext, dest, synth, stepData, g, dur, base + k * dt, vertexIndex, fx.drive); } catch (e) {}
+    }
+  }
+
+  if (fx.verbSend > 0.01 && verbIn) {
+    let g = vel * fx.verbSend * 0.7;
+    for (let k = 0; k < VERB_TAPS.length; k++) {
+      const tapGain = g * Math.pow(0.62, k);
+      if (tapGain < 0.012) break;
+      try { triggerTimbre(audioContext, verbIn, synth, stepData, tapGain, dur, base + VERB_TAPS[k], vertexIndex, fx.drive); } catch (e) {}
+    }
+  }
+}
+
 // ── Scheduler tick (non-overlapping window approach) ─────────
 // The scheduler guarantees [scheduleFrom, scheduleTo) windows never overlap,
 // so every event fires exactly once — no deduplication needed.
+// Each CYCLE is scheduled from the scene the sequencer maps it to, so scene
+// loops are sample-accurate: the next scene's downbeat is scheduled inside
+// the lookahead window, on the exact cycle boundary, with the transport
+// running continuously (no resets, no voice kills, no UI-thread latency).
 function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
   try {
-    const shapes = getShapes();
-    if (!shapes || shapes.length === 0) return;
+    const state = getState();
+    if (!state || !state.scenes || state.scenes.length === 0) return;
     if (!cycleDur || cycleDur <= 0) return;
     if (!isFinite(scheduleFrom) || !isFinite(scheduleTo)) return;
 
-    // Distribute note budget fairly across shapes (round-robin, not first-come)
-    const noteBudget = Math.min(MAX_NOTES_PER_TICK, Math.max(4, Math.floor(MAX_NOTES_PER_TICK / Math.max(1, shapes.length)) * shapes.length));
+    const relFrom = scheduleFrom - transportStart;
+    const relTo = scheduleTo - transportStart;
+    if (!isFinite(relFrom) || !isFinite(relTo)) return;
+    const firstCycle = Math.max(0, Math.floor(relFrom / cycleDur));
+    const lastCycle = Math.min(firstCycle + 2, Math.floor(relTo / cycleDur)); // Cap to 2 cycles per tick
+
     let totalNotes = 0;
 
-    for (const shape of shapes) {
-      if (totalNotes >= noteBudget) break;
-      if (!shape || !shape.vertices) continue;
-      const synth = ensureSynth(shape);
-      if (!synth) continue;
+    for (let cycle = firstCycle; cycle <= lastCycle; cycle++) {
+      const sceneIdx = sceneProvider ? sceneProvider(cycle) : state.activeSceneIndex;
+      const scene = state.scenes[sceneIdx];
+      const shapes = scene && scene.shapes;
+      if (!shapes || shapes.length === 0) continue;
 
-      const sides = shape.sides;
-      if (!sides || sides <= 0) continue;
-      const sub = Math.min(shape.subdivision || 1, 4);
-      const interval = cycleDur / sides;
-      const subInterval = interval / sub;
+      const cycleStart = transportStart + cycle * cycleDur;
 
-      const relFrom = scheduleFrom - transportStart;
-      const relTo = scheduleTo - transportStart;
-      if (!isFinite(relFrom) || !isFinite(relTo)) continue;
-      const firstCycle = Math.max(0, Math.floor(relFrom / cycleDur));
-      const lastCycle = Math.min(firstCycle + 2, Math.floor(relTo / cycleDur)); // Cap to 2 cycles per tick
+      for (const shape of shapes) {
+        if (totalNotes >= MAX_NOTES_PER_TICK) break;
+        if (!shape || !shape.vertices) continue;
+        const synth = ensureSynth(shape);
+        if (!synth) continue;
 
-      for (let cycle = firstCycle; cycle <= lastCycle; cycle++) {
-        const cycleStart = transportStart + cycle * cycleDur;
+        const sides = shape.sides;
+        if (!sides || sides <= 0) continue;
+        const interval = cycleDur / sides;
+        // Event thinning at extreme tempo: never schedule a shape's events
+        // closer than minEventSpacing — drop subdivisions first, then
+        // stride across vertices. Prevents the native voice-teardown storm
+        // that crashes react-native-audio-api at very high BPM.
+        let sub = Math.min(shape.subdivision || 1, 4);
+        if (interval / sub < AUDIO.minEventSpacing) {
+          sub = Math.max(1, Math.floor(interval / AUDIO.minEventSpacing));
+        }
+        const vertexStride = interval < AUDIO.minEventSpacing
+          ? Math.ceil(AUDIO.minEventSpacing / interval)
+          : 1;
+        const subInterval = interval / sub;
 
         for (let i = 0; i < sides; i++) {
+          if (i % vertexStride !== 0) continue;
           for (let s = 0; s < sub; s++) {
             const eventTime = cycleStart + i * interval + s * subInterval;
             if (eventTime < scheduleFrom || eventTime >= scheduleTo) continue;
@@ -175,18 +416,18 @@ function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
             const stepData = s === 0 ? v : (v.subs && v.subs[s - 1]);
             if (!stepData || stepData.muted) continue;
 
-            if (totalNotes >= noteBudget) break;
+            if (totalNotes >= MAX_NOTES_PER_TICK) break;
             totalNotes++;
 
-            const vel = velocityToGain(stepData.velocity || 85) * (shape.volume != null ? shape.volume : 1);
+            // Per-shape volume lives on the channel strip now — velocity only here
+            const vel = velocityToGain(stepData.velocity || 85);
             const dur = getNoteDuration(shape);
 
-            try {
-              triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur, eventTime, i);
-            } catch (e) {}
+            scheduleVoice(shape, synth, stepData, vel, dur, eventTime, i);
 
             if (s === 0 && onNoteTriggered) {
-              try { onNoteTriggered(shape, i); } catch (e) {}
+              // eventTime = exact scheduled audio-clock time of this note
+              try { onNoteTriggered(shape, i, eventTime); } catch (e) {}
             }
           }
         }
@@ -200,11 +441,9 @@ function triggerStep(shape, stepData, vertexIndex) {
   if (!stepData || stepData.muted || !audioContext || !masterGain) return;
   const synth = ensureSynth(shape);
   if (!synth) return;
-  const vel = velocityToGain(stepData.velocity || 85) * (shape.volume != null ? shape.volume : 1);
+  const vel = velocityToGain(stepData.velocity || 85);
   const dur = getNoteDuration(shape);
-  try {
-    triggerTimbre(audioContext, masterGain, synth, stepData, vel, dur, undefined, vertexIndex);
-  } catch (e) {}
+  scheduleVoice(shape, synth, stepData, vel, dur, undefined, vertexIndex);
 }
 
 function triggerNote(shape, vertexIndex) {
@@ -231,10 +470,51 @@ function getTargetGain() {
   try {
     const shapes = getShapes();
     const count = Math.max(1, shapes.length);
-    return 0.7 / Math.sqrt(count);
+    const userVol = Math.max(0, Math.min(1, getMasterFx().volume));
+    return (0.7 / Math.sqrt(count)) * userVol;
   } catch (e) {
     return 0.7;
   }
+}
+
+// ── Live effects parameter application ──────────────────────
+// All ramps via setValueAtTime + linearRamp — NEVER cancelScheduledValues
+function applyMasterFx() {
+  if (!audioContext || !masterTone) return;
+  const m = getMasterFx();
+  const now = audioContext.currentTime;
+  try {
+    masterTone.frequency.setValueAtTime(masterTone.frequency.value, now);
+    masterTone.frequency.linearRampToValueAtTime(toneToHz(m.tone, 300, 20000), now + 0.04);
+    echoLevel.gain.setValueAtTime(echoLevel.gain.value, now);
+    echoLevel.gain.linearRampToValueAtTime(Math.max(0, Math.min(1, m.delayWet)), now + 0.04);
+    verbLevel.gain.setValueAtTime(verbLevel.gain.value, now);
+    verbLevel.gain.linearRampToValueAtTime(Math.max(0, Math.min(1, m.reverbWet)), now + 0.04);
+  } catch (e) {}
+}
+
+// Update one shape's fx in state and ramp its strip immediately
+function setShapeFx(shapeId, patch) {
+  updateState(s => {
+    for (const scene of s.scenes) {
+      const sh = (scene.shapes || []).find(x => x.id === shapeId);
+      if (sh) {
+        sh.fx = { ...makeDefaultFx(), ...(sh.fx || {}), ...patch };
+      }
+    }
+  });
+  const shapes = getShapes();
+  const live = shapes.find(x => x.id === shapeId);
+  if (live) applyChannelFx(live);
+}
+
+// Update master fx in state and ramp the buses immediately
+function setMasterFx(patch) {
+  updateState(s => {
+    s.effects = { ...makeDefaultMasterFx(), ...(s.effects || {}), ...patch };
+  });
+  applyMasterFx();
+  if (patch.volume !== undefined) rescheduleAll(); // re-ramp master gain target
 }
 
 function rescheduleAll() {
@@ -242,6 +522,10 @@ function rescheduleAll() {
   updateCycleDuration();
   if (audioInitialized && scheduler) {
     cleanupOrphanedSynths();
+    cleanupOrphanedChannels();
+    // Keep live strips + master buses in sync with state
+    for (const sh of getShapes()) applyChannelFx(sh);
+    applyMasterFx();
   }
   if (audioContext && masterGain) {
     try {
@@ -288,12 +572,12 @@ function transitionScene() {
 function pauseAudio() {
   if (!audioInitialized || !scheduler) return;
   scheduler.stop();
-  try { if (audioContext && audioContext.suspend) audioContext.suspend(); } catch (e) {}
+  safeAudioOp(() => { if (audioContext && audioContext.suspend) return audioContext.suspend(); });
 }
 
 function resumeAudio() {
   if (!audioInitialized || !scheduler) return;
-  try { if (audioContext && audioContext.resume) audioContext.resume(); } catch (e) {}
+  safeAudioOp(() => { if (audioContext && audioContext.resume) return audioContext.resume(); });
   scheduler.resume();
 }
 
@@ -317,5 +601,6 @@ function getElapsedSeconds() {
 export {
   initAudio, startPlayback, pauseAudio, resumeAudio, updateBPM, updateCycleDuration, rescheduleAll, transitionScene,
   triggerNote, playPreview, swapTimbre, isAudioInitialized, getTransportSeconds, getElapsedSeconds,
-  getCycleDuration, ensureSynth, setNoteCallback, getAudioContext,
+  getCycleDuration, ensureSynth, setNoteCallback, setSceneProvider, getAudioContext,
+  setShapeFx, setMasterFx, applyMasterFx,
 };

@@ -31,7 +31,10 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
       if (now === lastNow && now !== 0) {
         frozenCount++;
         if (frozenCount > 10) {
-          try { audioContext.resume(); } catch (e) {}
+          try {
+            const p = audioContext.resume();
+            if (p && typeof p.catch === 'function') p.catch(() => {});
+          } catch (e) {}
           frozenCount = 0;
           // Fall through to schedule after resume
         } else {
@@ -52,6 +55,10 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
       }
 
       nextScheduleTime = to;
+    } catch (e) {
+      // An exception escaping a setInterval callback is an uncaught JS error
+      // (a hard crash in release builds) — never let the tick throw.
+      if (__DEV__) console.warn('[scheduler] tick error:', e?.message || e);
     } finally {
       ticking = false;
     }
@@ -92,8 +99,10 @@ export function createScheduler(audioContext, cycleDuration, onTick) {
       const elapsed = now - startTime;
       const progress = ((elapsed % _cycleDuration) + _cycleDuration) % _cycleDuration / _cycleDuration;
       startTime = now - progress * dur;
-      // Reset schedule cursor so we don't miss/double events near the change
-      nextScheduleTime = now;
+      // NEVER rewind the cursor over already-scheduled time — the lookahead
+      // window ahead of `now` has fired its events; re-covering it under the
+      // new grid double-fires every note in it (audible flam on BPM drags).
+      nextScheduleTime = Math.max(nextScheduleTime, now);
     }
     _cycleDuration = dur;
   }

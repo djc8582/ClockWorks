@@ -3,7 +3,10 @@
 // 6 octaves of samples (C1–C6) for minimal pitch-shifting artifacts.
 
 const ATTACK_SEC = 0.004;
-const MAX_VOICES = 24;
+// 48 voices: large enough that at capped tempo voices expire naturally
+// instead of being evicted mid-life — eviction is a native stop/disconnect
+// on a PLAYING node, the riskiest operation on react-native-audio-api 0.6.5
+const MAX_VOICES = 48;
 const REF_PITCHES = [24, 36, 48, 60, 72, 84]; // C1, C2, C3, C4, C5, C6
 const REF_NAMES = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'];
 
@@ -75,10 +78,137 @@ const DRUM_KIT_ASSETS = {
 const SYNTH_TIMBRES = ['keys', 'organ', 'marimba', 'vibes', 'pluck'];
 const PEAK_TARGETS = { keys: 0.75, organ: 0.70, marimba: 0.75, vibes: 0.72, pluck: 0.70 };
 
+// Granular timbres — rendered at init by a real grain engine: clouds of
+// short Hann-windowed grains sprayed across a source sample, with random
+// position, length, amplitude and per-grain pitch (octave shimmer etc.),
+// overlap-added into a new buffer. Playback is ONE BufferSource per note —
+// authentic granular texture with zero runtime scheduling risk.
+const GRANULAR_DEFS = {
+  cloud:   { src: 'epiano', grains: 90,  lenMin: 0.06, lenMax: 0.16, pitches: [1],        spray: 1.0,  dur: 2.4, env: 'pad'  },
+  shimmer: { src: 'synth',  grains: 110, lenMin: 0.05, lenMax: 0.12, pitches: [1, 2],     spray: 1.0,  dur: 2.6, env: 'pad'  },
+  stutter: { src: 'pluck',  grains: 48,  lenMin: 0.03, lenMax: 0.06, pitches: [1, 0.5],   spray: 0.25, dur: 1.2, env: 'perc' },
+};
+
+function renderGranular(def, srcData, sr) {
+  const len = Math.ceil(def.dur * sr);
+  const out = new Float32Array(len);
+  for (let gIdx = 0; gIdx < def.grains; gIdx++) {
+    const gLen = Math.floor((def.lenMin + Math.random() * (def.lenMax - def.lenMin)) * sr);
+    const outStart = Math.floor(Math.random() * Math.max(1, len - gLen));
+    const srcSpan = Math.max(1, Math.floor(srcData.length * def.spray) - gLen * 2);
+    const srcStart = Math.floor(Math.random() * srcSpan);
+    const pitch = def.pitches[Math.floor(Math.random() * def.pitches.length)];
+    const amp = 0.25 + Math.random() * 0.55;
+    for (let i = 0; i < gLen; i++) {
+      const srcPos = srcStart + i * pitch;
+      const si = Math.floor(srcPos);
+      if (si + 1 >= srcData.length || outStart + i >= len) break;
+      const frac = srcPos - si;
+      const s = srcData[si] * (1 - frac) + srcData[si + 1] * frac;
+      // Hann window — no clicks at grain edges
+      const w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / gLen));
+      out[outStart + i] += s * w * amp;
+    }
+  }
+  // Note envelope over the whole cloud
+  for (let i = 0; i < len; i++) {
+    const t = i / sr;
+    let env;
+    if (def.env === 'perc') {
+      env = Math.exp(-t / (def.dur * 0.3)) * attackEnv(i, sr, 0.005);
+    } else {
+      const release = Math.min(1, (def.dur - t) / 0.5);
+      env = attackEnv(i, sr, 0.06) * Math.exp(-t / (def.dur * 0.9)) * Math.max(0, release);
+    }
+    out[i] *= env;
+  }
+  normalize(out, 0.72);
+  return out;
+}
+
+async function renderGranularBanks(ctx) {
+  const sr = ctx.sampleRate || 44100;
+  for (const [id, def] of Object.entries(GRANULAR_DEFS)) {
+    if (!sampleBank[id]) sampleBank[id] = {};
+    for (const midi of REF_PITCHES) {
+      try {
+        const srcBuf = sampleBank[def.src] && sampleBank[def.src][midi];
+        if (!srcBuf) continue;
+        const raw = renderGranular(def, srcBuf.getChannelData(0), sr);
+        const buf = ctx.createBuffer(1, raw.length, sr);
+        const ch = buf.getChannelData(0);
+        for (let j = 0; j < raw.length; j++) ch[j] = raw[j];
+        sampleBank[id][midi] = buf;
+      } catch (e) {
+        if (__DEV__) console.warn(`[timbres] Granular failed ${id}/${midi}:`, e?.message || e);
+      }
+      // Yield between refs so the loading screen stays smooth
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
+}
+
 let sampleBank = null;
 let drumBank = {};
 const activeVoices = [];
 let assetsPreloaded = false;
+
+// ── Drive (distortion) ───────────────────────────────────────
+// 0.6.5 has no WaveShaperNode, so drive is TRUE waveshaping applied to
+// the buffer itself: tanh saturation, peak-compensated, quantized to two
+// hot levels and lazily cached per (buffer, level). Playback stays a
+// plain BufferSource — zero extra runtime risk.
+const driveCache = new Map(); // 'key:step' → AudioBuffer
+const DRIVE_PREGAIN = [0, 4, 12];
+const DRIVE_CACHE_MAX = 24;
+
+function getDriveStep(drive) {
+  const d = Number(drive) || 0;
+  if (d < 0.15) return 0;
+  if (d < 0.6) return 1;
+  return 2;
+}
+
+function distortBuffer(buffer, step) {
+  const src = buffer.getChannelData(0);
+  const out = audioCtxRef.createBuffer(1, src.length, buffer.sampleRate || audioCtxRef.sampleRate);
+  const dst = out.getChannelData(0);
+  const pre = DRIVE_PREGAIN[step];
+  let peakIn = 0;
+  for (let i = 0; i < src.length; i++) { const a = Math.abs(src[i]); if (a > peakIn) peakIn = a; }
+  let peakOut = 0;
+  for (let i = 0; i < src.length; i++) {
+    const y = Math.tanh(src[i] * pre);
+    dst[i] = y;
+    const a = Math.abs(y);
+    if (a > peakOut) peakOut = a;
+  }
+  // Gain-compensate so drive changes character, not loudness
+  if (peakOut > 0 && peakIn > 0) {
+    const g = peakIn / peakOut;
+    for (let i = 0; i < dst.length; i++) dst[i] *= g;
+  }
+  return out;
+}
+
+function getDrivenBuffer(cacheKey, buffer, driveStep) {
+  if (!driveStep || !audioCtxRef || !buffer) return buffer;
+  const key = cacheKey + ':' + driveStep;
+  let b = driveCache.get(key);
+  if (!b) {
+    try {
+      if (driveCache.size >= DRIVE_CACHE_MAX) {
+        const oldest = driveCache.keys().next().value;
+        driveCache.delete(oldest);
+      }
+      b = distortBuffer(buffer, driveStep);
+      driveCache.set(key, b);
+    } catch (e) {
+      return buffer;
+    }
+  }
+  return b;
+}
 
 function midiToFreq(midi) {
   return 440 * Math.pow(2, (midi - 69) / 12);
@@ -257,13 +387,15 @@ function initSampleBank(ctx) {
 
   for (const id of SYNTH_TIMBRES) sampleBank[id] = {};
   for (const id of Object.keys(SAMPLE_ASSETS)) sampleBank[id] = {};
+  for (const id of Object.keys(GRANULAR_DEFS)) sampleBank[id] = {};
   drumBank = {};
 
-  // Run synth generation and WAV decoding in parallel, return when both done
+  // Synth generation and WAV decoding in parallel; granular timbres render
+  // last — their grain engines feed on the decoded/rendered source buffers
   return Promise.all([
     renderSynthBuffersAsync(ctx).then(() => { synthsReady = true; }).catch(() => {}),
     decodeSamples(ctx).catch(() => {}),
-  ]);
+  ]).then(() => renderGranularBanks(ctx).catch(() => {}));
 }
 
 async function renderSynthBuffersAsync(ctx) {
@@ -395,15 +527,18 @@ function fadeOutAllVoices(ctx) {
 function findSample(timbreId, midi) {
   const bank = sampleBank && sampleBank[timbreId];
   if (!bank) return null;
-  let bestRef = REF_PITCHES[0];
-  let bestDist = Math.abs(midi - bestRef);
-  for (let i = 1; i < REF_PITCHES.length; i++) {
+  // Nearest reference pitch that actually HAS a decoded buffer — some
+  // timbres lack octaves (guitar has no C6) and individual decodes can
+  // fail; picking a missing ref would silence the whole pitch range.
+  let bestRef = -1;
+  let bestDist = Infinity;
+  for (let i = 0; i < REF_PITCHES.length; i++) {
+    if (!bank[REF_PITCHES[i]]) continue;
     const d = Math.abs(midi - REF_PITCHES[i]);
     if (d < bestDist) { bestDist = d; bestRef = REF_PITCHES[i]; }
   }
-  const buffer = bank[bestRef];
-  if (!buffer) return null;
-  return { buffer, rate: midiToFreq(midi) / midiToFreq(bestRef) };
+  if (bestRef < 0) return null;
+  return { buffer: bank[bestRef], rate: midiToFreq(midi) / midiToFreq(bestRef), ref: bestRef };
 }
 
 // ── Public API ───────────────────────────────────────────────
@@ -413,8 +548,9 @@ function createTimbre(ctx, timbreId) {
 
 const DRUM_SLOT_ORDER = ['kick', 'snare', 'hihat', 'perc'];
 
-function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, startTime, vertexIndex) {
+function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, startTime, vertexIndex, drive = 0) {
   if (!ctx || !masterGain || !synth || !stepData) return;
+  const driveStep = getDriveStep(drive);
   if (!isFinite(velocity) || velocity <= 0) return;
   if (!isFinite(duration) || duration <= 0) return;
   const now = ctx.currentTime;
@@ -429,12 +565,15 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, sta
     if (!kit) return;
     const slots = stepData.pitches || [vertexIndex % DRUM_SLOT_ORDER.length];
     for (const slotIdx of slots) {
-      const slotName = DRUM_SLOT_ORDER[slotIdx % DRUM_SLOT_ORDER.length];
+      // Round + wrap: legacy project files can carry fractional/negative
+      // pitches into drum shapes — map them to a slot instead of skipping
+      const n = DRUM_SLOT_ORDER.length;
+      const slotName = DRUM_SLOT_ORDER[((Math.round(slotIdx) % n) + n) % n];
       const buffer = kit[slotName];
       if (!buffer) continue;
       try {
         const src = ctx.createBufferSource();
-        src.buffer = buffer;
+        src.buffer = getDrivenBuffer(synth.timbreId + ':' + slotName, buffer, driveStep);
         src.playbackRate.value = 1;
         const gain = ctx.createGain();
         gain.gain.setValueAtTime(0.001, t);
@@ -464,7 +603,7 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, sta
     if (!sample) continue;
     try {
       const src = ctx.createBufferSource();
-      src.buffer = sample.buffer;
+      src.buffer = getDrivenBuffer(synth.timbreId + ':' + sample.ref, sample.buffer, driveStep);
       src.playbackRate.value = sample.rate;
       const gain = ctx.createGain();
       gain.gain.setValueAtTime(0.001, t);
@@ -485,5 +624,7 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, sta
 
 function getSampleBank() { return sampleBank; }
 function getDrumBank() { return drumBank; }
+function getActiveVoiceCount() { return activeVoices.length; }
+function getMaxVoices() { return MAX_VOICES; }
 
-export { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices, preloadAssets, getSampleBank, getDrumBank };
+export { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices, preloadAssets, getSampleBank, getDrumBank, getActiveVoiceCount, getMaxVoices };
