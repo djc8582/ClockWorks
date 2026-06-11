@@ -10,3 +10,83 @@ index 4d82dca..e2b17fe 100644
  #include <limits>
  
  // https://webaudio.github.io/web-audio-api/
+diff --git a/node_modules/react-native-audio-api/common/cpp/audioapi/core/effects/BiquadFilterNode.cpp b/node_modules/react-native-audio-api/common/cpp/audioapi/core/effects/BiquadFilterNode.cpp
+index ca7c369..dcd7995 100644
+--- a/node_modules/react-native-audio-api/common/cpp/audioapi/core/effects/BiquadFilterNode.cpp
++++ b/node_modules/react-native-audio-api/common/cpp/audioapi/core/effects/BiquadFilterNode.cpp
+@@ -84,10 +84,12 @@ void BiquadFilterNode::getFrequencyResponse(
+ }
+ 
+ void BiquadFilterNode::resetCoefficients() {
+-  x1_ = 0.0;
+-  x2_ = 0.0;
+-  y1_ = 0.0;
+-  y2_ = 0.0;
++  for (int s = 0; s < 2; s += 1) {
++    x1_[s] = 0.0;
++    x2_[s] = 0.0;
++    y1_[s] = 0.0;
++    y2_[s] = 0.0;
++  }
+ }
+ 
+ void BiquadFilterNode::setNormalizedCoefficients(
+@@ -357,14 +359,17 @@ void BiquadFilterNode::applyFilter() {
+ void BiquadFilterNode::processNode(
+     const std::shared_ptr<AudioBus> &processingBus,
+     int framesToProcess) {
+-  resetCoefficients();
++  // NOTE: do NOT reset filter state here — an IIR filter's memory must
++  // persist across render quanta or it restarts (and clicks) every 128
++  // frames. Coefficients are still refreshed from the params each quantum.
+   applyFilter();
+ 
+   for (int c = 0; c < processingBus->getNumberOfChannels(); c += 1) {
+-    float x1 = x1_;
+-    float x2 = x2_;
+-    float y1 = y1_;
+-    float y2 = y2_;
++    int s = c < 2 ? c : 1; // per-channel state (mono/stereo)
++    float x1 = x1_[s];
++    float x2 = x2_[s];
++    float y1 = y1_[s];
++    float y2 = y2_[s];
+ 
+     float b0 = b0_;
+     float b1 = b1_;
+@@ -383,6 +388,11 @@ void BiquadFilterNode::processNode(
+       y2 = y1;
+       y1 = output;
+     }
++
++    x1_[s] = x1;
++    x2_[s] = x2;
++    y1_[s] = y1;
++    y2_[s] = y2;
+   }
+ }
+ 
+diff --git a/node_modules/react-native-audio-api/common/cpp/audioapi/core/effects/BiquadFilterNode.h b/node_modules/react-native-audio-api/common/cpp/audioapi/core/effects/BiquadFilterNode.h
+index 19295ac..6b29740 100644
+--- a/node_modules/react-native-audio-api/common/cpp/audioapi/core/effects/BiquadFilterNode.h
++++ b/node_modules/react-native-audio-api/common/cpp/audioapi/core/effects/BiquadFilterNode.h
+@@ -42,11 +42,14 @@ class BiquadFilterNode : public AudioNode {
+   std::shared_ptr<AudioParam> gainParam_;
+   audioapi::BiquadFilterType type_;
+ 
+-  // delayed samples
+-  float x1_ = 0;
+-  float x2_ = 0;
+-  float y1_ = 0;
+-  float y2_ = 0;
++  // delayed samples — PER CHANNEL, persisted across render quanta.
++  // (Upstream bug: single shared floats, zeroed every quantum by
++  // resetCoefficients() and never written back — the filter restarted
++  // from silence every 128 frames, buzzing at the quantum rate.)
++  float x1_[2] = {0, 0};
++  float x2_[2] = {0, 0};
++  float y1_[2] = {0, 0};
++  float y2_[2] = {0, 0};
+ 
+   // coefficients
+   float b0_ = 1.0;

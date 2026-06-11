@@ -47,9 +47,14 @@ const resToQ = dspResToQ;
 // (same reason masterGainValue is tracked in JS) — reading one as a ramp
 // anchor can poison the param with NaN → buzzing filters, dead controls.
 // Every ramp anchors from a JS-tracked value instead.
+// Idempotent: skips when the target already matches the tracked value —
+// rescheduleAll runs often and identical re-ramps just spam the native
+// param event queue (a fragile area of this library version)
 function rampParam(param, from, to, now) {
+  if (Math.abs(to - from) < 1e-4) return false;
   param.setValueAtTime(from, now);
   param.linearRampToValueAtTime(to, now + 0.04);
+  return true;
 }
 
 // JS-tracked current values for the master fx graph
@@ -571,12 +576,20 @@ function getTargetGain() {
     // every note — without reserving room for them, combining several
     // hot sends overloads the master sum (audible crackle)
     let sendEnergy = 0;
+    let maxBoostDb = 0;
     for (const sh of shapes) {
       const fx = getShapeFx(sh);
       sendEnergy += Math.max(0, fx.echoSend) + Math.max(0, fx.verbSend);
+      const boost = (Math.max(0, fx.eqLow) + Math.max(0, fx.eqMid) + Math.max(0, fx.eqHigh)) * 12;
+      if (boost > maxBoostDb) maxBoostDb = boost;
     }
+    const m = getMasterFx();
+    maxBoostDb += (Math.max(0, m.eqLow) + Math.max(0, m.eqMid) + Math.max(0, m.eqHigh)) * 12;
     const sendHeadroom = 1 / (1 + 0.35 * (sendEnergy / count));
-    return (0.7 / Math.sqrt(count)) * userVol * sendHeadroom;
+    // Half-compensate positive EQ boosts: +12dB of boost still sounds
+    // boosted (+6dB louder) but can no longer slam the output into clipping
+    const eqHeadroom = Math.pow(10, -Math.min(30, maxBoostDb) / 40);
+    return (0.7 / Math.sqrt(count)) * userVol * sendHeadroom * eqHeadroom;
   } catch (e) {
     return 0.7;
   }
@@ -624,6 +637,10 @@ function setShapeFx(shapeId, patch) {
     }
   }
   if (live) applyChannelFx(live);
+  // EQ boosts feed the headroom calculation — keep the master target fresh
+  if (patch.eqLow !== undefined || patch.eqMid !== undefined || patch.eqHigh !== undefined) {
+    rescheduleAll();
+  }
 }
 
 // Update master fx in state and ramp the buses immediately
@@ -632,7 +649,11 @@ function setMasterFx(patch) {
     s.effects = { ...makeDefaultMasterFx(), ...(s.effects || {}), ...patch };
   });
   applyMasterFx();
-  if (patch.volume !== undefined) rescheduleAll(); // re-ramp master gain target
+  // Volume and EQ boosts both feed the master gain target
+  if (patch.volume !== undefined || patch.eqLow !== undefined ||
+      patch.eqMid !== undefined || patch.eqHigh !== undefined) {
+    rescheduleAll();
+  }
 }
 
 function rescheduleAll() {
