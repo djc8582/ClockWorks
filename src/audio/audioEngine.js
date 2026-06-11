@@ -392,6 +392,27 @@ function cleanupOrphanedChannels() {
 // under voice-pool pressure so extreme tempos degrade gracefully.
 const VERB_TAPS = [0.029, 0.061, 0.097, 0.141];
 
+// Effective echo tap spacing: BPM-synced beats when delaySync is set
+// (tracks tempo automatically — recomputed per note), free seconds otherwise
+function getEchoDelaySeconds(m) {
+  if (m.delaySync) {
+    const bpm = (getState() && getState().bpm) || 120;
+    return Math.max(0.05, Math.min(1.2, (60 / bpm) * m.delaySync));
+  }
+  return Math.max(0.05, Math.min(0.7, m.delayTime));
+}
+
+// Graduated tap budget: when the voice pool fills, shed the QUIETEST taps
+// first instead of cutting all effects at once — combining many sends
+// degrades gracefully rather than stuttering on/off
+function tapBudget() {
+  const pressure = getActiveVoiceCount() / Math.max(1, getMaxVoices());
+  if (pressure < 0.5) return 3;
+  if (pressure < 0.7) return 2;
+  if (pressure < 0.85) return 1;
+  return 0;
+}
+
 function scheduleVoice(shape, synth, stepData, vel, dur, when, vertexIndex) {
   const ch = getChannel(shape);
   if (!ch) return;
@@ -400,29 +421,30 @@ function scheduleVoice(shape, synth, stepData, vel, dur, when, vertexIndex) {
     triggerTimbre(audioContext, ch.input, synth, stepData, vel, dur, when, vertexIndex, fx.drive);
   } catch (e) {}
 
-  const pressureOk = getActiveVoiceCount() < getMaxVoices() * 0.7;
-  if (!pressureOk) return;
+  const maxTaps = tapBudget();
+  if (maxTaps === 0) return;
   const base = when != null ? when : audioContext.currentTime;
 
   if (fx.echoSend > 0.01 && echoPanL) {
     const m = getMasterFx();
     const fb = Math.max(0, Math.min(0.85, m.delayFeedback));
-    const dt = Math.max(0.05, Math.min(0.7, m.delayTime));
+    const dt = getEchoDelaySeconds(m);
     let g = vel * fx.echoSend;
-    for (let k = 1; k <= 3; k++) {
+    for (let k = 1; k <= Math.min(3, maxTaps); k++) {
       g *= fb;
       if (g < 0.012) break;
       const dest = (k % 2 === 1) ? echoPanL : echoPanR;
-      try { triggerTimbre(audioContext, dest, synth, stepData, g, dur, base + k * dt, vertexIndex, fx.drive); } catch (e) {}
+      try { triggerTimbre(audioContext, dest, synth, stepData, g, dur, base + k * dt, vertexIndex, fx.drive, true); } catch (e) {}
     }
   }
 
   if (fx.verbSend > 0.01 && verbIn) {
     let g = vel * fx.verbSend * 0.7;
-    for (let k = 0; k < VERB_TAPS.length; k++) {
+    const verbTapCount = Math.min(VERB_TAPS.length, maxTaps + 1);
+    for (let k = 0; k < verbTapCount; k++) {
       const tapGain = g * Math.pow(0.62, k);
       if (tapGain < 0.012) break;
-      try { triggerTimbre(audioContext, verbIn, synth, stepData, tapGain, dur, base + VERB_TAPS[k], vertexIndex, fx.drive); } catch (e) {}
+      try { triggerTimbre(audioContext, verbIn, synth, stepData, tapGain, dur, base + VERB_TAPS[k], vertexIndex, fx.drive, true); } catch (e) {}
     }
   }
 }
@@ -545,7 +567,16 @@ function getTargetGain() {
     const shapes = getShapes();
     const count = Math.max(1, shapes.length);
     const userVol = Math.max(0, Math.min(1, getMasterFx().volume));
-    return (0.7 / Math.sqrt(count)) * userVol;
+    // Send-aware headroom: echo + reverb taps add overlapping copies of
+    // every note — without reserving room for them, combining several
+    // hot sends overloads the master sum (audible crackle)
+    let sendEnergy = 0;
+    for (const sh of shapes) {
+      const fx = getShapeFx(sh);
+      sendEnergy += Math.max(0, fx.echoSend) + Math.max(0, fx.verbSend);
+    }
+    const sendHeadroom = 1 / (1 + 0.35 * (sendEnergy / count));
+    return (0.7 / Math.sqrt(count)) * userVol * sendHeadroom;
   } catch (e) {
     return 0.7;
   }
@@ -582,8 +613,16 @@ function setShapeFx(shapeId, patch) {
       }
     }
   });
-  const shapes = getShapes();
-  const live = shapes.find(x => x.id === shapeId);
+  // Apply to the strip even when the shape lives in a NON-active scene —
+  // channels are keyed by id and persist across scene switches
+  const state = getState();
+  let live = null;
+  if (state && state.scenes) {
+    for (const scene of state.scenes) {
+      live = (scene.shapes || []).find(x => x.id === shapeId);
+      if (live) break;
+    }
+  }
   if (live) applyChannelFx(live);
 }
 

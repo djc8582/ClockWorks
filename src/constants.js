@@ -152,7 +152,8 @@ export function makeDefaultMasterFx() {
     eqLow: 0,         // master 3-band EQ, -1..1 → ±12dB
     eqMid: 0,
     eqHigh: 0,
-    delayTime: 0.25,  // echo tap spacing in seconds (0.05..0.7)
+    delayTime: 0.25,  // echo tap spacing in seconds (0.05..0.7) — used when delaySync is null
+    delaySync: 0.5,   // null = free time; otherwise BEATS per tap (0.25=1/16, 0.5=1/8, 0.75=1/8., 1=1/4) — tracks BPM
     delayFeedback: 0.45, // per-tap decay (0..0.85)
     delayWet: 0.5,    // echo bus return level
     reverbWet: 0.5,   // reverb bus return level

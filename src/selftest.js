@@ -195,7 +195,11 @@ export async function runSelfTest() {
     updateBPM(240); // 1s cycle — fast capture
     const cd = getCycleDuration();
     startPlayback();
-    await sleep(1400);
+    // Poll — context resume can lag; wait until a full cycle is captured
+    for (let i = 0; i < 24; i++) {
+      await sleep(250);
+      if (events.length >= 8) break;
+    }
     pauseAudio();
     setNoteCallback(null);
     updateBPM(120);
@@ -252,7 +256,11 @@ export async function runSelfTest() {
     updateBPM(240); // 1s cycles
     const cd = getCycleDuration();
     startPlayback();
-    await sleep(2500);
+    // Poll — need downbeats from 3 consecutive cycles (A → B → A)
+    for (let i = 0; i < 28; i++) {
+      await sleep(250);
+      if (events.filter(e => e.vi === 0).length >= 3) break;
+    }
     pauseAudio();
     setNoteCallback(null);
     updateBPM(120);
@@ -422,6 +430,13 @@ export async function runSelfTest() {
       energy += Math.abs(flat.left[i]);
     }
     return energy > 0 && diff / energy > 0.05;
+  });
+
+  await check('fx: BPM-synced echo persists and clears on manual drag', () => {
+    setMasterFx({ delaySync: 0.5 });
+    if (getState().effects.delaySync !== 0.5) return false;
+    setMasterFx({ delayTime: 0.3, delaySync: null }); // viz drag takes manual control
+    return getState().effects.delaySync === null && getState().effects.delayTime === 0.3;
   });
 
   await check('fx: legacy tone migrates to filter cutoff', () => {

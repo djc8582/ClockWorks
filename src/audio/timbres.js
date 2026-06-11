@@ -488,7 +488,12 @@ let audioCtxRef = null;
 function trackVoice(entry) {
   activeVoices.push(entry);
   while (activeVoices.length > MAX_VOICES) {
-    killVoice(activeVoices.shift());
+    // Priority eviction: kill the oldest effect TAP before any main note —
+    // when many sends combine, echoes thin out instead of melodies dropping
+    let idx = activeVoices.findIndex(v => v.tap);
+    if (idx === -1 || idx === activeVoices.length - 1) idx = 0;
+    const [victim] = activeVoices.splice(idx, 1);
+    killVoice(victim);
   }
 }
 
@@ -548,7 +553,7 @@ function createTimbre(ctx, timbreId) {
 
 const DRUM_SLOT_ORDER = ['kick', 'snare', 'hihat', 'perc'];
 
-function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, startTime, vertexIndex, drive = 0) {
+function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, startTime, vertexIndex, drive = 0, isTap = false) {
   if (!ctx || !masterGain || !synth || !stepData) return;
   const driveStep = getDriveStep(drive);
   if (!isFinite(velocity) || velocity <= 0) return;
@@ -587,7 +592,7 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, sta
         gain.connect(masterGain);
         src.start(t);
         const endTime = t + Math.min(durSec + 0.1, buffer.duration) + 0.05;
-        trackVoice({ src, gain, endTime, killed: false });
+        trackVoice({ src, gain, endTime, killed: false, tap: isTap });
       } catch (e) {}
     }
     return;
@@ -617,7 +622,7 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, sta
       gain.connect(masterGain);
       src.start(t);
       const endTime = t + Math.min(duration + 0.15, sampleDur) + 0.05;
-      trackVoice({ src, gain, endTime, killed: false });
+      trackVoice({ src, gain, endTime, killed: false, tap: isTap });
     } catch (e) {}
   }
 }

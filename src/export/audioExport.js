@@ -5,6 +5,7 @@ import * as Sharing from 'expo-sharing';
 import { getState } from '../state.js';
 import { TIMING, makeDefaultFx, makeDefaultMasterFx } from '../constants.js';
 import { biquadCoeffs, processBiquad, cutoffToHz, resToQ, eqGainDb, EQ_BANDS } from '../audio/dsp.js';
+import { AUDIO } from '../constants.js';
 
 // WAV file encoder
 function encodeWAV(samples, sampleRate, numChannels) {
@@ -87,13 +88,13 @@ function findSampleData(timbreId, midi) {
     if (d < bestDist) { bestDist = d; bestRef = REF_PITCHES[i]; }
   }
   if (bestRef < 0) return null;
-  return { buffer: bank[bestRef], rate: midiToFreq(midi) / midiToFreq(bestRef) };
+  return { buffer: bank[bestRef], rate: midiToFreq(midi) / midiToFreq(bestRef), ref: bestRef };
 }
 
 // Mix a single sample into the output buffer at a given time.
 // The effective rate accounts for both pitch shifting AND sample rate conversion.
-function mixSample(output, outputRate, buffer, pitchRate, startSample, velocity, duration) {
-  const channelData = buffer.getChannelData(0);
+function mixSample(output, outputRate, buffer, pitchRate, startSample, velocity, duration, dataOverride) {
+  const channelData = dataOverride || buffer.getChannelData(0);
   const bufferRate = buffer.sampleRate || outputRate;
 
   // Effective resampling ratio: pitch shift * sample rate conversion
@@ -162,6 +163,41 @@ function applyShapeEqAndFilter(data, fx, sr) {
 
 const VERB_TAPS = [0.029, 0.061, 0.097, 0.141];
 
+// Per-buffer drive (matches live: tanh on the SOURCE buffer pre-mix —
+// tanh(sum) at chords sounds different from sum(tanh), so order matters)
+const exportDriveCache = new Map();
+function drivenData(cacheKey, channelData, drive) {
+  const step = drive < 0.15 ? 0 : drive < 0.6 ? 1 : 2;
+  if (step === 0) return channelData;
+  const key = cacheKey + ':' + step;
+  let out = exportDriveCache.get(key);
+  if (!out) {
+    const pre = step === 1 ? 4 : 12;
+    out = new Float32Array(channelData.length);
+    let peakIn = 0, peakOut = 0;
+    for (let i = 0; i < channelData.length; i++) { const a = Math.abs(channelData[i]); if (a > peakIn) peakIn = a; }
+    for (let i = 0; i < channelData.length; i++) {
+      const y = Math.tanh(channelData[i] * pre);
+      out[i] = y;
+      const a = Math.abs(y);
+      if (a > peakOut) peakOut = a;
+    }
+    if (peakOut > 0 && peakIn > 0) {
+      const g = peakIn / peakOut;
+      for (let i = 0; i < out.length; i++) out[i] *= g;
+    }
+    if (exportDriveCache.size > 24) exportDriveCache.delete(exportDriveCache.keys().next().value);
+    exportDriveCache.set(key, out);
+  }
+  return out;
+}
+
+// Equal-power pan gains for the echo bus panners at ±0.7 (matches
+// StereoPanner math exactly — the old 0.92/0.38 were eyeballed)
+const ECHO_PAN = 0.7;
+const ECHO_G_NEAR = Math.cos(((-ECHO_PAN) + 1) * Math.PI / 4); // ≈0.972
+const ECHO_G_FAR = Math.sin(((-ECHO_PAN) + 1) * Math.PI / 4);  // ≈0.233
+
 // Mix the whole project into STEREO Float32Arrays with the full effects
 // chain (per-shape volume/tone/pan, ping-pong echo, diffuse reverb,
 // master tone/volume) — pure DSP, validated directly by the self-tests.
@@ -175,7 +211,10 @@ export function renderAudioMix(state, numCycles = 4) {
   const scenes = state.scenes.filter(sc => sc.shapes && sc.shapes.length > 0);
   if (scenes.length === 0) return null;
   const master = { ...makeDefaultMasterFx(), ...(state.effects || {}) };
-  const TAIL_SEC = 1.5 + (master.delayWet > 0.01 ? 3 * Math.min(0.7, master.delayTime) : 0);
+  const effDelay = master.delaySync
+    ? Math.max(0.05, Math.min(1.2, (60 / bpm) * master.delaySync))
+    : Math.min(0.7, master.delayTime);
+  const TAIL_SEC = 1.5 + (master.delayWet > 0.01 ? 3 * effDelay : 0);
   const totalDuration = cycleDuration * numCycles * scenes.length + TAIL_SEC;
   const totalSamples = Math.ceil(totalDuration * sampleRate);
 
@@ -199,8 +238,16 @@ export function renderAudioMix(state, numCycles = 4) {
   for (const { shape, timeOffset: t0 } of shapeRuns) {
     shapeBus.fill(0);
     const sides = shape.sides || 3;
-    const sub = shape.subdivision || 1;
     const interval = cycleDuration / sides;
+    // Same event thinning as the live engine — the bounce must not contain
+    // notes the live engine would drop at extreme tempo
+    let sub = shape.subdivision || 1;
+    if (interval / sub < AUDIO.minEventSpacing) {
+      sub = Math.max(1, Math.floor(interval / AUDIO.minEventSpacing));
+    }
+    const vertexStride = interval < AUDIO.minEventSpacing
+      ? Math.ceil(AUDIO.minEventSpacing / interval)
+      : 1;
     const subInterval = interval / sub;
     const volume = shape.volume != null ? shape.volume : 1;
     const fx = { ...makeDefaultFx(), ...(shape.fx || {}) };
@@ -210,6 +257,7 @@ export function renderAudioMix(state, numCycles = 4) {
       const cycleStart = t0 + cycle * cycleDuration;
 
       for (let vi = 0; vi < sides; vi++) {
+        if (vi % vertexStride !== 0) continue;
         const v = shape.vertices[vi];
         if (!v) continue;
 
@@ -231,38 +279,24 @@ export function renderAudioMix(state, numCycles = 4) {
               const slotName = DRUM_SLOTS[((Math.round(slotIdx) % n) + n) % n];
               const buf = kit[slotName];
               if (!buf) continue;
-              mixSample(shapeBus, sampleRate, buf, 1, startSample, vel, dur);
+              mixSample(shapeBus, sampleRate, buf, 1, startSample, vel, dur,
+                drivenData(shape.timbre + ':' + slotName, buf.getChannelData(0), fx.drive));
             }
           } else {
             const pitches = stepData.pitches || [60];
             for (const pitch of pitches.slice(0, 3)) {
               const sample = findSampleData(shape.timbre, pitch);
               if (!sample) continue;
-              mixSample(shapeBus, sampleRate, sample.buffer, sample.rate, startSample, vel, dur);
+              mixSample(shapeBus, sampleRate, sample.buffer, sample.rate, startSample, vel, dur,
+                drivenData(shape.timbre + ':' + sample.ref, sample.buffer.getChannelData(0), fx.drive));
             }
           }
         }
       }
     }
 
-    // Channel strip: drive → tone → pan into master; sends tap post-tone
-    if (fx.drive >= 0.15) {
-      // Same quantized tanh waveshape + peak compensation as live playback
-      const pre = fx.drive < 0.6 ? 4 : 12;
-      let peakIn = 0;
-      for (let i = 0; i < totalSamples; i++) { const a = Math.abs(shapeBus[i]); if (a > peakIn) peakIn = a; }
-      let peakOut = 0;
-      for (let i = 0; i < totalSamples; i++) {
-        const y = Math.tanh(shapeBus[i] * pre);
-        shapeBus[i] = y;
-        const a = Math.abs(y);
-        if (a > peakOut) peakOut = a;
-      }
-      if (peakOut > 0 && peakIn > 0) {
-        const g = peakIn / peakOut;
-        for (let i = 0; i < totalSamples; i++) shapeBus[i] *= g;
-      }
-    }
+    // Channel strip: (drive already applied per-buffer, matching live) →
+    // EQ → filter → pan into master; sends tap post-EQ/filter
     applyShapeEqAndFilter(shapeBus, fx, sampleRate);
     const p = Math.max(-1, Math.min(1, fx.pan));
     const gl = Math.cos((p + 1) * Math.PI / 4);
@@ -274,9 +308,11 @@ export function renderAudioMix(state, numCycles = 4) {
       outR[i] += x * gr;
     }
 
-    // Ping-pong echo taps
+    // Ping-pong echo taps (BPM-synced spacing when delaySync is set)
     if (fx.echoSend > 0.01 && master.delayWet > 0.01) {
-      const dt = Math.max(0.05, Math.min(0.7, master.delayTime));
+      const dt = master.delaySync
+        ? Math.max(0.05, Math.min(1.2, (60 / bpm) * master.delaySync))
+        : Math.max(0.05, Math.min(0.7, master.delayTime));
       const fb = Math.max(0, Math.min(0.85, master.delayFeedback));
       for (let k = 1; k <= 3; k++) {
         const g = fx.echoSend * Math.pow(fb, k);
@@ -303,16 +339,16 @@ export function renderAudioMix(state, numCycles = 4) {
     }
   }
 
-  // Bus returns
-  lowpassInPlace(echoL, 5000, sampleRate);
-  lowpassInPlace(echoR, 5000, sampleRate);
-  lowpassInPlace(verb, 3200, sampleRate);
+  // Bus returns — biquad lowpass (matches the live BiquadFilter exactly)
+  processBiquad(echoL, biquadCoeffs('lowpass', 5000, 0.707, 0, sampleRate));
+  processBiquad(echoR, biquadCoeffs('lowpass', 5000, 0.707, 0, sampleRate));
+  processBiquad(verb, biquadCoeffs('lowpass', 3200, 0.707, 0, sampleRate));
   const echoWet = Math.max(0, Math.min(1, master.delayWet));
   const verbWet = Math.max(0, Math.min(1, master.reverbWet));
   for (let i = 0; i < totalSamples; i++) {
-    // Echo panned hard-ish L/R (matches echoPanL/R ±0.7), verb centered
-    outL[i] += echoL[i] * echoWet * 0.92 + echoR[i] * echoWet * 0.38 + verb[i] * verbWet * 0.71;
-    outR[i] += echoR[i] * echoWet * 0.92 + echoL[i] * echoWet * 0.38 + verb[i] * verbWet * 0.71;
+    // Equal-power ±0.7 panners (exact StereoPanner math), verb centered
+    outL[i] += echoL[i] * echoWet * ECHO_G_NEAR + echoR[i] * echoWet * ECHO_G_FAR + verb[i] * verbWet * 0.71;
+    outR[i] += echoR[i] * echoWet * ECHO_G_NEAR + echoL[i] * echoWet * ECHO_G_FAR + verb[i] * verbWet * 0.71;
   }
 
   // Master EQ + tone + volume — exact biquads, both channels

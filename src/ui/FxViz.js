@@ -2,7 +2,7 @@
 // pattern: every effect shows its actual response, and you edit by
 // dragging the graph itself. All curves come from the SAME RBJ math the
 // audio graph runs (src/audio/dsp.js), so what you see is what you hear.
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Canvas, Path, Circle, Line, Skia, vec } from '@shopify/react-native-skia';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -10,6 +10,30 @@ import { COLORS } from '../constants.js';
 import {
   biquadCoeffs, responseCurveDb, cutoffToHz, resToQ, eqGainDb, EQ_BANDS, EQ_RANGE_DB,
 } from '../audio/dsp.js';
+
+// Stable, throttled change emitter: the gesture is created ONCE (inline
+// onChange props would otherwise recreate it every render and drop drags),
+// and updates are rate-limited to ~30/s with a trailing call so the final
+// drag position always lands — no re-render storm while audio plays.
+function useStableChange(onChange) {
+  const fnRef = useRef(onChange);
+  fnRef.current = onChange;
+  const lastAt = useRef(0);
+  const trailing = useRef(null);
+  return useMemo(() => (patch) => {
+    const now = Date.now();
+    clearTimeout(trailing.current);
+    if (now - lastAt.current > 33) {
+      lastAt.current = now;
+      fnRef.current(patch);
+    } else {
+      trailing.current = setTimeout(() => {
+        lastAt.current = Date.now();
+        fnRef.current(patch);
+      }, 40);
+    }
+  }, []);
+}
 
 export const VIZ_W = 262;
 export const VIZ_H = 96;
@@ -65,13 +89,14 @@ export function FilterViz({ fx, color, onChange }) {
   const handleX = freqToX(cutoffToHz(cutoff));
   const handleY = PAD + (1 - Math.max(0, Math.min(1, fx.res))) * (VIZ_H - PAD * 2);
 
+  const emit = useStableChange(onChange);
   const pan = useMemo(() => Gesture.Pan()
     .runOnJS(true)
     .onUpdate((e) => {
       const c = xToNorm(e.x);
       const r = Math.max(0, Math.min(1, 1 - (e.y - PAD) / (VIZ_H - PAD * 2)));
-      onChange({ cutoff: Math.round(c * 100) / 100, res: Math.round(r * 100) / 100 });
-    }), [onChange]);
+      emit({ cutoff: Math.round(c * 100) / 100, res: Math.round(r * 100) / 100 });
+    }), []);
 
   return (
     <View>
@@ -106,6 +131,7 @@ export function EqViz({ values, color, onChange }) {
     return { path: curvePath(responseCurveDb(stages)), handles: h };
   }, [values.eqLow, values.eqMid, values.eqHigh]);
 
+  const emit = useStableChange(onChange);
   const pan = useMemo(() => Gesture.Pan()
     .runOnJS(true)
     .onUpdate((e) => {
@@ -114,8 +140,8 @@ export function EqViz({ values, color, onChange }) {
       const key = e.x < PAD + thirds ? 'eqLow' : e.x < PAD + thirds * 2 ? 'eqMid' : 'eqHigh';
       const db = ((VIZ_H / 2 - e.y) / (VIZ_H / 2 - PAD)) * 18;
       const v = Math.max(-1, Math.min(1, db / EQ_RANGE_DB));
-      onChange({ [key]: Math.round(v * 100) / 100 });
-    }), [onChange]);
+      emit({ [key]: Math.round(v * 100) / 100 });
+    }), []);
 
   return (
     <View>
@@ -186,13 +212,14 @@ export function EchoViz({ send, time, feedback, color, onChange }) {
     return out;
   }, [send, time, feedback]);
 
+  const emit = useStableChange(onChange);
   const pan = useMemo(() => Gesture.Pan()
     .runOnJS(true)
     .onUpdate((e) => {
       const t = 0.05 + xToNorm(e.x) * 0.65;
       const fb = Math.max(0, Math.min(0.85, 1 - (e.y - PAD) / (VIZ_H - PAD * 2)));
-      onChange({ delayTime: Math.round(t * 100) / 100, delayFeedback: Math.round(fb * 100) / 100 });
-    }), [onChange]);
+      emit({ delayTime: Math.round(t * 100) / 100, delayFeedback: Math.round(fb * 100) / 100 });
+    }), []);
 
   return (
     <View>

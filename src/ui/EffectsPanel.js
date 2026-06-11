@@ -2,7 +2,7 @@
 // visualizer (GarageBand-style: edit by dragging the response itself),
 // with precise sliders underneath. Driven by global ui.fxPanel state
 // ('master' | shapeId | null) so any surface can open it.
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, Modal } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Slider from '@react-native-community/slider';
@@ -49,6 +49,35 @@ function EffectCard({ title, summary, color, expanded, onToggle, children }) {
   );
 }
 
+const SYNC_OPTIONS = [
+  { label: 'Free', v: null },
+  { label: '1/16', v: 0.25 },
+  { label: '1/8', v: 0.5 },
+  { label: '1/8·', v: 0.75 },
+  { label: '1/4', v: 1 },
+];
+
+function effectiveDelaySeconds(master, bpm) {
+  if (master.delaySync) return Math.max(0.05, Math.min(1.2, (60 / (bpm || 120)) * master.delaySync));
+  return Math.max(0.05, Math.min(0.7, master.delayTime));
+}
+
+function SyncPills({ value, color, onSelect }) {
+  return (
+    <View style={styles.typeRow}>
+      {SYNC_OPTIONS.map(o => (
+        <Pressable
+          key={o.label}
+          style={[styles.typeBtn, value === o.v && { backgroundColor: color }]}
+          onPress={() => onSelect(o.v)}
+        >
+          <Text style={[styles.typeText, value === o.v && { color: '#fff' }]}>{o.label}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
 function eqSummary(v) {
   const fmt = (x, name) => Math.abs(x) < 0.04 ? null : `${name}${x > 0 ? '+' : ''}${Math.round(x * 12)}`;
   const parts = [fmt(v.eqLow, 'L'), fmt(v.eqMid, 'M'), fmt(v.eqHigh, 'H')].filter(Boolean);
@@ -58,6 +87,10 @@ function eqSummary(v) {
 export default function EffectsPanel() {
   const [open, setOpen] = useState('eq');
   const fxPanel = useStore(s => s.ui.fxPanel || null);
+  const bpm = useStore(s => s.bpm);
+
+  // Fresh rack target → start at EQ, not whatever the last shape had open
+  useEffect(() => { if (fxPanel) setOpen('eq'); }, [fxPanel]);
 
   // RAW stable refs only — allocating in a selector loops useSyncExternalStore
   const shape = useStore(s => {
@@ -151,11 +184,15 @@ export default function EffectsPanel() {
 
                 <EffectCard
                   title="Echo" color={accent}
-                  summary={fx.echoSend < 0.01 ? 'off' : `send ${Math.round(fx.echoSend * 100)} · ${Math.round(master.delayTime * 1000)}ms`}
+                  summary={fx.echoSend < 0.01 ? 'off'
+                    : `send ${Math.round(fx.echoSend * 100)} · ${master.delaySync ? (SYNC_OPTIONS.find(o => o.v === master.delaySync)?.label || 'sync') : Math.round(master.delayTime * 1000) + 'ms'}`}
                   expanded={open === 'echo'} onToggle={() => toggle('echo')}
                 >
-                  <EchoViz send={fx.echoSend} time={master.delayTime} feedback={master.delayFeedback}
-                    color={accent} onChange={(patch) => setMasterFx(patch)} />
+                  <SyncPills value={master.delaySync ?? null} color={accent}
+                    onSelect={(v) => setMasterFx({ delaySync: v })} />
+                  <EchoViz send={fx.echoSend} time={effectiveDelaySeconds(master, bpm)} feedback={master.delayFeedback}
+                    color={accent}
+                    onChange={(patch) => setMasterFx({ ...patch, delaySync: null })} />
                   <Fader label="Send" value={fx.echoSend} color={accent}
                     onChange={(v) => setShapeFx(shapeId, { echoSend: Math.round(v * 100) / 100 })} />
                   <Fader label="Level" value={master.delayWet} color={accent}
@@ -180,14 +217,19 @@ export default function EffectsPanel() {
               <>
                 <EffectCard
                   title="Echo" color={COLORS.shapes[1].main}
-                  summary={`${Math.round(master.delayTime * 1000)}ms · fdbk ${Math.round(master.delayFeedback * 100)}`}
+                  summary={`${master.delaySync ? (SYNC_OPTIONS.find(o => o.v === master.delaySync)?.label || 'sync') + ' · ' + Math.round(effectiveDelaySeconds(master, bpm) * 1000) + 'ms' : Math.round(master.delayTime * 1000) + 'ms'} · fdbk ${Math.round(master.delayFeedback * 100)}`}
                   expanded={open === 'echo'} onToggle={() => toggle('echo')}
                 >
-                  <EchoViz send={0.8} time={master.delayTime} feedback={master.delayFeedback}
-                    color={COLORS.shapes[1].main} onChange={(patch) => setMasterFx(patch)} />
-                  <Fader label="Time" value={master.delayTime} min={0.05} max={0.7} color={COLORS.shapes[1].main}
-                    format={(v) => Math.round(v * 1000) + 'ms'}
-                    onChange={(v) => setMasterFx({ delayTime: Math.round(v * 100) / 100 })} />
+                  <SyncPills value={master.delaySync ?? null} color={COLORS.shapes[1].main}
+                    onSelect={(v) => setMasterFx({ delaySync: v })} />
+                  <EchoViz send={0.8} time={effectiveDelaySeconds(master, bpm)} feedback={master.delayFeedback}
+                    color={COLORS.shapes[1].main}
+                    onChange={(patch) => setMasterFx({ ...patch, delaySync: null })} />
+                  {!master.delaySync && (
+                    <Fader label="Time" value={master.delayTime} min={0.05} max={0.7} color={COLORS.shapes[1].main}
+                      format={(v) => Math.round(v * 1000) + 'ms'}
+                      onChange={(v) => setMasterFx({ delayTime: Math.round(v * 100) / 100 })} />
+                  )}
                   <Fader label="Fdbk" value={master.delayFeedback} max={0.85} color={COLORS.shapes[1].main}
                     onChange={(v) => setMasterFx({ delayFeedback: Math.round(v * 100) / 100 })} />
                   <Fader label="Level" value={master.delayWet} color={COLORS.shapes[1].main}
