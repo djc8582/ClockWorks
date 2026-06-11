@@ -1,0 +1,12 @@
+diff --git a/node_modules/react-native-audio-api/common/cpp/audioapi/core/Constants.h b/node_modules/react-native-audio-api/common/cpp/audioapi/core/Constants.h
+index 4d82dca..e2b17fe 100644
+--- a/node_modules/react-native-audio-api/common/cpp/audioapi/core/Constants.h
++++ b/node_modules/react-native-audio-api/common/cpp/audioapi/core/Constants.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include <cmath>
++#include <cstddef>
+ #include <limits>
+ 
+ // https://webaudio.github.io/web-audio-api/

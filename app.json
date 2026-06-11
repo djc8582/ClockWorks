@@ -12,13 +12,19 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.clockworks.app"
+      "bundleIdentifier": "com.clockworks.app",
+      "buildNumber": "1",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#F5F5F7"
       },
-      "package": "com.clockworks.app"
+      "package": "com.clockworks.app",
+      "versionCode": 1
     },
     "plugins": [
       "expo-asset"
