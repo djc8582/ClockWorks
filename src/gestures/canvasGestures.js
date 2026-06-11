@@ -5,7 +5,7 @@ import { calculateRingRadii } from '../shapes.js';
 import { hitTest, hitTestGhostRing, getNextSideCount, getNextColorIndex } from './hitTesting.js';
 import { initAudio, startPlayback, pauseAudio, resumeAudio, rescheduleAll } from '../audio/audioEngine.js';
 import { resetCycleCount } from '../sequencer.js';
-import { DIMENSIONS, MAX_SHAPES, PITCH, TIMBRES, DRUM_TIMBRES } from '../constants.js';
+import { DIMENSIONS, MAX_SHAPES, PITCH, TIMBRES, DRUM_TIMBRES, makeDefaultFx } from '../constants.js';
 import { distanceBetween } from '../shapes.js';
 
 const CENTER_TAP_RADIUS = 40;
@@ -151,7 +151,7 @@ export function addNewShape(sides) {
     const scene = safePanelScene(s);
     if (!scene) return;
     scene.shapes.push({
-      id: newId, sides, colorIndex: newColor, timbre: newTimbre, volume: 1.0, subdivision: 1, vertices,
+      id: newId, sides, colorIndex: newColor, timbre: newTimbre, volume: 1.0, subdivision: 1, fx: makeDefaultFx(), vertices,
     });
     s.ui.panelShapeId = newId;
     s.ui.panelSceneIndex = s.activeSceneIndex;

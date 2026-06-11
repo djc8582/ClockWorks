@@ -1,9 +1,9 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { COLORS } from '../constants.js';
-import { getState, updateState, loadScene } from '../state.js';
+import { COLORS, UI } from '../constants.js';
+import { getState, updateState } from '../state.js';
 import { rescheduleAll } from '../audio/audioEngine.js';
-import { resetCycleCount, rebuildPlaybackOrder } from '../sequencer.js';
+import { rebuildPlaybackOrder } from '../sequencer.js';
 import { useStore } from '../hooks/useStore.js';
 
 function MixerToggle() {
@@ -99,6 +99,9 @@ export default React.memo(function SceneStrip() {
           const isEditing = i === editIndex;
           const isPlaying = i === activeIndex && playing;
           const inRange = i <= lastEnabled;
+          // Each slot borrows a palette color — the strip reads like the
+          // colored vertex dots on the canvas
+          const pal = COLORS.shapes[i % COLORS.shapes.length];
 
           return (
             <Pressable
@@ -106,21 +109,21 @@ export default React.memo(function SceneStrip() {
               style={[
                 styles.slot,
                 inRange && !enabled && styles.slotLooped,
-                enabled && !isEditing && styles.slotEnabled,
-                isEditing && styles.slotEditing,
+                enabled && !isEditing && { backgroundColor: pal.fill },
+                isEditing && [styles.slotEditing, { backgroundColor: pal.main }],
               ]}
               onPress={() => onSlotPress(i)}
             >
               <Text style={[
                 styles.slotText,
                 inRange && styles.slotTextInRange,
-                enabled && styles.slotTextEnabled,
+                enabled && !isEditing && { color: pal.main },
                 isEditing && styles.slotTextEditing,
               ]}>
                 {i + 1}
               </Text>
               {isPlaying && !isEditing && (
-                <View style={styles.playingDot} />
+                <View style={[styles.playingDot, { backgroundColor: pal.main }]} />
               )}
             </Pressable>
           );
@@ -135,75 +138,67 @@ const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 5,
+    paddingVertical: 6,
     paddingHorizontal: 10,
-    gap: 6,
+    gap: 8,
     backgroundColor: COLORS.panelBg,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.06)',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
+    borderTopColor: UI.separator,
   },
   slots: {
     flex: 1,
     flexDirection: 'row',
-    gap: 4,
+    gap: 5,
   },
   slot: {
     flex: 1,
-    paddingVertical: 7,
-    borderRadius: 8,
-    backgroundColor: 'rgba(0,0,0,0.03)',
+    paddingVertical: 8,
+    borderRadius: UI.pill,
+    backgroundColor: 'rgba(0,0,0,0.04)',
     alignItems: 'center',
     justifyContent: 'center',
   },
   slotLooped: {
-    backgroundColor: 'rgba(0,0,0,0.06)',
-  },
-  slotEnabled: {
-    backgroundColor: 'rgba(0,0,0,0.12)',
+    backgroundColor: 'rgba(0,0,0,0.08)',
   },
   slotEditing: {
-    backgroundColor: COLORS.text,
+    ...UI.softShadow,
   },
   slotText: {
     fontSize: 12,
-    fontWeight: '600',
-    color: 'rgba(0,0,0,0.15)',
+    fontWeight: '800',
+    color: 'rgba(0,0,0,0.18)',
   },
   slotTextInRange: {
-    color: 'rgba(0,0,0,0.3)',
-  },
-  slotTextEnabled: {
-    color: COLORS.text,
+    color: 'rgba(0,0,0,0.35)',
   },
   slotTextEditing: {
     color: '#fff',
   },
   mixerBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    paddingHorizontal: 13,
+    paddingVertical: 8,
+    borderRadius: UI.pill,
+    backgroundColor: COLORS.shapes[3].fill,
   },
   mixerBtnActive: {
-    backgroundColor: COLORS.text,
+    backgroundColor: COLORS.shapes[3].main,
   },
   mixerBtnText: {
     fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.text,
+    fontWeight: '800',
+    color: COLORS.shapes[3].main,
   },
   mixerBtnTextActive: {
     color: '#fff',
   },
   playingDot: {
     position: 'absolute',
-    top: 2,
-    right: 2,
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
+    top: 3,
+    right: 6,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
     backgroundColor: COLORS.shapes[0].main,
   },
 });

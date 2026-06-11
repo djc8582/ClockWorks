@@ -21,8 +21,6 @@ export default React.memo(function PianoRollCell({
   isSelectedColumn,
   isC,
   isGroupStart,
-  cellWidth,
-  cellHeight,
 }) {
   function onPress() {
     const state = getState();
@@ -83,7 +81,6 @@ export default React.memo(function PianoRollCell({
       onPress={onPress}
       style={[
         styles.cell,
-        { width: cellWidth, height: cellHeight },
         isC && styles.isC,
         isSelectedColumn && styles.selCol,
         isGroupStart && styles.groupStart,
@@ -108,6 +105,9 @@ export default React.memo(function PianoRollCell({
 
 const styles = StyleSheet.create({
   cell: {
+    // Sized by the parent row (animated width/height on the UI thread) —
+    // cells never re-render during zoom
+    flex: 1,
     borderRightWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderColor: 'rgba(0,0,0,0.06)',
@@ -127,7 +127,8 @@ const styles = StyleSheet.create({
   },
   bar: {
     width: '100%',
-    borderRadius: 2,
+    borderTopLeftRadius: 3,
+    borderTopRightRadius: 3,
   },
   barMuted: {
     backgroundColor: 'rgba(0,0,0,0.1)',

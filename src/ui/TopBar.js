@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, Pressable, Modal, ScrollView, TextInput, StyleSheet } from 'react-native';
 import Slider from '@react-native-community/slider';
-import { COLORS } from '../constants.js';
+import { COLORS, UI } from '../constants.js';
 import { updateState, getState, initState } from '../state.js';
 import { updateCycleDuration, rescheduleAll } from '../audio/audioEngine.js';
 import { useStore } from '../hooks/useStore.js';
@@ -74,7 +74,7 @@ export default React.memo(function TopBar() {
 
   return (
     <View style={styles.header}>
-      <Pressable onPress={openProjects}>
+      <Pressable style={styles.projectChip} onPress={openProjects}>
         <Text style={styles.projectName}>Clockworks</Text>
       </Pressable>
 
@@ -83,7 +83,7 @@ export default React.memo(function TopBar() {
         <Slider
           style={styles.bpmSlider}
           minimumValue={10}
-          maximumValue={1000}
+          maximumValue={500}
           step={1}
           value={bpm}
           onValueChange={onBpmChange}
@@ -150,22 +150,22 @@ export default React.memo(function TopBar() {
           <View style={styles.exportModal} onStartShouldSetResponder={() => true}>
             <Text style={styles.modalTitle}>Export</Text>
 
-            <Pressable style={styles.exportOption} onPress={() => { setExportOpen(false); exportMIDI(); }}>
-              <Text style={styles.exportOptionTitle}>MIDI</Text>
+            <Pressable style={[styles.exportOption, { backgroundColor: COLORS.shapes[0].fill }]} onPress={() => { setExportOpen(false); exportMIDI(); }}>
+              <Text style={[styles.exportOptionTitle, { color: COLORS.shapes[0].main }]}>MIDI</Text>
               <Text style={styles.exportOptionDesc}>Standard MIDI file for any DAW</Text>
             </Pressable>
 
-            <Pressable style={styles.exportOption} onPress={() => {
+            <Pressable style={[styles.exportOption, { backgroundColor: COLORS.shapes[1].fill }]} onPress={() => {
               setExportOpen(false);
               setSampleBanks(getSampleBank(), getDrumBank());
               exportAudio(4).catch(e => { if (__DEV__) console.warn('Audio export failed:', e); });
             }}>
-              <Text style={styles.exportOptionTitle}>Audio (WAV)</Text>
+              <Text style={[styles.exportOptionTitle, { color: COLORS.shapes[1].main }]}>Audio (WAV)</Text>
               <Text style={styles.exportOptionDesc}>4 cycles per scene, normalized</Text>
             </Pressable>
 
-            <Pressable style={styles.exportOption} onPress={() => { setExportOpen(false); exportSheet(); }}>
-              <Text style={styles.exportOptionTitle}>Sheet Music (PDF)</Text>
+            <Pressable style={[styles.exportOption, { backgroundColor: COLORS.shapes[4].fill }]} onPress={() => { setExportOpen(false); exportSheet(); }}>
+              <Text style={[styles.exportOptionTitle, { color: COLORS.shapes[4].main }]}>Sheet Music (PDF)</Text>
               <Text style={styles.exportOptionDesc}>Note grid for all scenes</Text>
             </Pressable>
           </View>
@@ -179,14 +179,22 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
     backgroundColor: COLORS.panelBg,
     gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: UI.separator,
+  },
+  projectChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: UI.pill,
+    backgroundColor: UI.chipBg,
   },
   projectName: {
-    fontSize: 15,
-    fontWeight: '700',
+    fontSize: 14,
+    fontWeight: '800',
     color: COLORS.text,
     letterSpacing: -0.3,
   },
@@ -197,10 +205,10 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   bpmLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.textDim,
-    width: 28,
+    fontSize: 12,
+    fontWeight: '700',
+    color: COLORS.textLight,
+    width: 32,
     textAlign: 'right',
   },
   bpmSlider: {
@@ -208,15 +216,16 @@ const styles = StyleSheet.create({
     height: 24,
   },
   exportBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    backgroundColor: COLORS.shapes[1].fill,
+    borderRadius: UI.pill,
   },
   exportBtnText: {
     fontSize: 11,
-    fontWeight: '600',
-    color: COLORS.text,
+    fontWeight: '800',
+    color: COLORS.shapes[1].main,
+    letterSpacing: 0.3,
   },
   // Modal
   backdrop: {
@@ -229,13 +238,13 @@ const styles = StyleSheet.create({
     width: 300,
     maxHeight: '70%',
     backgroundColor: COLORS.panelBg,
-    borderRadius: 20,
-    overflow: 'hidden',
+    borderRadius: 24,
     padding: 16,
+    ...UI.cardShadow,
   },
   modalTitle: {
     fontSize: 17,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.text,
     textAlign: 'center',
     marginBottom: 12,
@@ -247,34 +256,35 @@ const styles = StyleSheet.create({
   },
   saveInput: {
     flex: 1,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    height: 38,
+    borderRadius: UI.radiusSmall,
+    backgroundColor: UI.chipBg,
     paddingHorizontal: 12,
     fontSize: 13,
     color: COLORS.text,
   },
   saveRowBtn: {
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     justifyContent: 'center',
-    borderRadius: 10,
+    borderRadius: UI.pill,
     backgroundColor: COLORS.shapes[0].main,
+    ...UI.softShadow,
   },
   saveRowBtnText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '800',
     color: '#fff',
   },
   newBtn: {
     paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    borderRadius: UI.pill,
+    backgroundColor: UI.chipBg,
     alignItems: 'center',
     marginBottom: 12,
   },
   newBtnText: {
     fontSize: 13,
-    fontWeight: '600',
+    fontWeight: '700',
     color: COLORS.text,
   },
   projectList: {
@@ -298,7 +308,7 @@ const styles = StyleSheet.create({
   },
   projectRowName: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '700',
     color: COLORS.text,
   },
   projectRowDate: {
@@ -310,35 +320,35 @@ const styles = StyleSheet.create({
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: 'rgba(0,0,0,0.05)',
+    backgroundColor: COLORS.shapes[0].fill,
     justifyContent: 'center',
     alignItems: 'center',
   },
   projectDeleteText: {
     fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.textDim,
+    fontWeight: '700',
+    color: COLORS.shapes[0].main,
   },
   // Export modal
   exportModal: {
     width: 280,
     backgroundColor: COLORS.panelBg,
-    borderRadius: 20,
+    borderRadius: 24,
     padding: 16,
-    gap: 8,
+    gap: 10,
+    ...UI.cardShadow,
   },
   exportOption: {
     paddingVertical: 14,
     paddingHorizontal: 16,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.03)',
+    borderRadius: UI.radius,
   },
   exportDisabled: {
     opacity: 0.4,
   },
   exportOptionTitle: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '800',
     color: COLORS.text,
   },
   exportOptionDesc: {

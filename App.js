@@ -6,7 +6,7 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { initState, updateState, clearListeners } from './src/state.js';
 import { initSequencer, rebuildPlaybackOrder } from './src/sequencer.js';
 import { useStore } from './src/hooks/useStore.js';
-import { COLORS } from './src/constants.js';
+import { COLORS, UI } from './src/constants.js';
 import { addNewShape } from './src/gestures/canvasGestures.js';
 import { preloadAssets } from './src/audio/timbres.js';
 import { initAudio } from './src/audio/audioEngine.js';
@@ -144,7 +144,7 @@ const loadStyles = StyleSheet.create({
     backgroundColor: '#333',
   },
   title: {
-    fontSize: 24, fontWeight: '700', color: '#333',
+    fontSize: 24, fontWeight: '800', color: '#333',
     letterSpacing: -0.5, marginBottom: 12,
   },
   dotsRow: {
@@ -199,9 +199,25 @@ function AppContent() {
     }
   }, [panelShapeId, panelShapes]);
 
+  // Dev-only self-test suite — runs when Metro is started with
+  // EXPO_PUBLIC_SELFTEST=1 (never in production builds)
+  useEffect(() => {
+    if (__DEV__ && process.env.EXPO_PUBLIC_SELFTEST === '1') {
+      const t = setTimeout(() => {
+        import('./src/selftest.js')
+          .then(m => m.runSelfTest())
+          .catch(e => console.warn('[SELFTEST] failed to load:', e?.message || e));
+      }, 1500);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={styles.container}>
       <StatusBar barStyle="dark-content" />
+
+      {/* Status-bar area painted to match the top bar — one continuous white surface */}
+      <View style={{ height: insets.top, backgroundColor: COLORS.panelBg }} />
 
       {/* Top bar */}
       <TopBar />
@@ -343,7 +359,7 @@ const styles = StyleSheet.create({
   bottomPanel: {
     backgroundColor: COLORS.panelBg,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(0,0,0,0.08)',
+    borderTopColor: UI.separator,
   },
   dragHandle: {
     alignItems: 'center',
@@ -365,26 +381,22 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.2)',
   },
   addPanel: {
-    width: 220,
+    width: 230,
     backgroundColor: COLORS.panelBg,
-    borderRadius: 16,
+    borderRadius: 24,
     padding: 24,
     alignItems: 'center',
     gap: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 24,
-    elevation: 8,
+    ...UI.cardShadow,
   },
   addPanelTitle: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '800',
     color: COLORS.text,
   },
   addPanelSides: {
-    fontSize: 28,
-    fontWeight: '700',
+    fontSize: 30,
+    fontWeight: '800',
     color: COLORS.text,
   },
   addPanelControls: {
@@ -392,27 +404,28 @@ const styles = StyleSheet.create({
     gap: 24,
   },
   addPanelBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.06)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: UI.chipBg,
     justifyContent: 'center',
     alignItems: 'center',
   },
   addPanelBtnText: {
     fontSize: 18,
-    fontWeight: '600',
+    fontWeight: '700',
     color: COLORS.text,
   },
   addConfirmBtn: {
     paddingHorizontal: 40,
     paddingVertical: 10,
-    borderRadius: 20,
+    borderRadius: UI.pill,
     backgroundColor: COLORS.shapes[0].main,
+    ...UI.softShadow,
   },
   addConfirmText: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '800',
     color: '#fff',
   },
   // Mixer modal
@@ -426,13 +439,13 @@ const styles = StyleSheet.create({
     width: 300,
     maxHeight: '70%',
     backgroundColor: COLORS.panelBg,
-    borderRadius: 20,
+    borderRadius: 24,
     padding: 16,
-    overflow: 'hidden',
+    ...UI.cardShadow,
   },
   mixerTitle: {
     fontSize: 17,
-    fontWeight: '700',
+    fontWeight: '800',
     color: COLORS.text,
     textAlign: 'center',
     marginBottom: 12,

@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
-import { COLORS, MIN_SIDES, MAX_SIDES, MAX_SUBDIVISION } from '../constants.js';
+import { COLORS, UI, MIN_SIDES, MAX_SIDES, MAX_SUBDIVISION, makeDefaultFx } from '../constants.js';
 import { getState, updateState, generateShapeId, safePanelScene } from '../state.js';
 import { rescheduleAll } from '../audio/audioEngine.js';
 import { PITCH } from '../constants.js';
@@ -87,7 +87,7 @@ export default function PanelHeader({ shape, color }) {
       if (sc.shapes.length === 0) {
         const newId = generateShapeId();
         sc.shapes.push({
-          id: newId, sides: 3, colorIndex: 0, timbre: "epiano", volume: 1.0, subdivision: 1,
+          id: newId, sides: 3, colorIndex: 0, timbre: "epiano", volume: 1.0, subdivision: 1, fx: makeDefaultFx(),
           vertices: [
             { pitches: [60], velocity: 100, muted: false, subs: [] },
             { pitches: [64], velocity: 85, muted: false, subs: [] },
@@ -165,7 +165,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
+    borderBottomColor: UI.separator,
   },
   titleRow: {
     flexDirection: 'row',
@@ -173,13 +173,13 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   colorDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
   },
   title: {
     fontSize: 15,
-    fontWeight: '600',
+    fontWeight: '800',
     color: COLORS.text,
   },
   controls: {
@@ -190,42 +190,43 @@ const styles = StyleSheet.create({
   stepper: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.04)',
-    borderRadius: 8,
+    backgroundColor: UI.chipBg,
+    borderRadius: UI.pill,
     overflow: 'hidden',
   },
   stepperBtn: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 11,
     paddingVertical: 6,
   },
   stepperBtnText: {
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '700',
     color: COLORS.text,
   },
   stepperVal: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: '800',
     color: COLORS.text,
     minWidth: 24,
     textAlign: 'center',
   },
   stepperLabel: {
     fontSize: 11,
+    fontWeight: '600',
     color: COLORS.textDim,
   },
   disabled: {
     opacity: 0.3,
   },
   deleteBtn: {
-    paddingHorizontal: 10,
+    paddingHorizontal: 11,
     paddingVertical: 4,
-    backgroundColor: 'rgba(0,0,0,0.04)',
-    borderRadius: 8,
+    backgroundColor: COLORS.shapes[0].fill,
+    borderRadius: UI.pill,
   },
   deleteBtnText: {
     fontSize: 18,
-    fontWeight: '600',
-    color: COLORS.textDim,
+    fontWeight: '700',
+    color: COLORS.shapes[0].main,
   },
 });
