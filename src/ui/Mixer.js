@@ -17,6 +17,17 @@ function getShapeName(sides) {
   return SHAPE_NAMES[sides] || `${sides}-gon`;
 }
 
+// The mixer lives in its own Modal. iOS cannot present a second sibling
+// modal while it's up — the FX modal mounts an INVISIBLE window that
+// swallows every touch. Dismiss the mixer first, then open the rack
+// after its dismiss animation has finished.
+function openFxPanel(target) {
+  updateState(s => { s.ui.mixerOpen = false; });
+  setTimeout(() => {
+    updateState(s => { s.ui.fxPanel = target; });
+  }, 300);
+}
+
 function Fader({ label, value, min = 0, max = 1, color, onChange, format }) {
   return (
     <View style={styles.faderRow}>
@@ -81,7 +92,7 @@ export default function Mixer() {
               <Text style={styles.channelTimbre}>{timbre ? timbre.label : ''}</Text>
               <Pressable
                 style={[styles.fxChip, { backgroundColor: color.main }]}
-                onPress={() => updateState(s => { s.ui.fxPanel = shape.id; })}
+                onPress={() => openFxPanel(shape.id)}
               >
                 <Text style={styles.fxChipText}>
                   {activeFx.length > 0 ? activeFx.join('·') : 'FX'}
@@ -98,7 +109,7 @@ export default function Mixer() {
       })}
 
       {/* Master */}
-      <Pressable style={styles.master} onPress={() => updateState(s => { s.ui.fxPanel = 'master'; })}>
+      <Pressable style={styles.master} onPress={() => openFxPanel('master')}>
         <Text style={styles.masterTitle}>Master</Text>
         <Text style={styles.masterHint}>eq · echo · reverb · output</Text>
         <Text style={styles.masterChevron}>{'›'}</Text>

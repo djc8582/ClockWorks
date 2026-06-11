@@ -4,6 +4,7 @@
 // ('master' | shapeId | null) so any surface can open it.
 import React, { useState } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, Modal } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import Slider from '@react-native-community/slider';
 import { COLORS, UI, FILTER_TYPES, makeDefaultFx, makeDefaultMasterFx } from '../constants.js';
 import { useStore } from '../hooks/useStore.js';
@@ -82,6 +83,9 @@ export default function EffectsPanel() {
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      {/* Modals are separate native windows — gesture handlers inside them
+          need their OWN root view, or touches break for the whole screen */}
+      <GestureHandlerRootView style={{ flex: 1 }}>
       <Pressable style={styles.backdrop} onPress={onClose}>
         <View style={styles.panel} onStartShouldSetResponder={() => true}>
           <Text style={styles.title}>{isMaster ? 'Master Effects' : 'Track Effects'}</Text>
@@ -211,6 +215,7 @@ export default function EffectsPanel() {
           </Pressable>
         </View>
       </Pressable>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
