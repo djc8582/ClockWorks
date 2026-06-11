@@ -154,20 +154,25 @@ function generateShapeStaff(shape, shapeIdx) {
   `;
 }
 
-export async function exportSheet() {
-  const state = getState();
+// Build the sheet-music HTML — pure (no printing, no share sheet),
+// so the self-test harness can validate it directly.
+export function buildSheetHTML(state) {
   const bpm = state.bpm || 120;
 
   let parts = '';
+  let sceneCount = 0;
   for (let si = 0; si < state.scenes.length; si++) {
     const scene = state.scenes[si];
+    if (!scene.shapes || scene.shapes.length === 0) continue; // skip empty slots
+    sceneCount++;
     parts += `<h2 style="color:#666;font-size:13px;border-bottom:1px solid #eee;padding-bottom:3px;margin-top:20px;">Scene ${si + 1}</h2>`;
     for (let shi = 0; shi < scene.shapes.length; shi++) {
       parts += generateShapeStaff(scene.shapes[shi], shi);
     }
   }
+  if (sceneCount === 0) return null;
 
-  const html = `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
   body { font-family: -apple-system, Helvetica, Arial, sans-serif; padding: 16px; color: #333; }
@@ -177,9 +182,14 @@ export async function exportSheet() {
 </style>
 </head><body>
   <h1>Clockworks</h1>
-  <div class="meta">${bpm} BPM &middot; ${state.scenes.length} scene${state.scenes.length > 1 ? 's' : ''}</div>
+  <div class="meta">${bpm} BPM &middot; ${sceneCount} scene${sceneCount > 1 ? 's' : ''}</div>
   ${parts}
 </body></html>`;
+}
+
+export async function exportSheet() {
+  const html = buildSheetHTML(getState());
+  if (!html) return;
 
   const { uri } = await Print.printToFileAsync({ html, width: 612, height: 792 });
 

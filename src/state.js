@@ -1,4 +1,4 @@
-import { PITCH, MAX_SCENES, MAX_SIDES, MAX_SHAPES, MAX_SUBDIVISION } from './constants.js';
+import { PITCH, MAX_SCENES, MAX_SIDES, MAX_SHAPES, MAX_SUBDIVISION, AUDIO, makeDefaultFx, makeDefaultMasterFx } from './constants.js';
 
 let state = null;
 const listeners = [];
@@ -17,6 +17,7 @@ function createDefaultScene() {
         timbre: "epiano",
         volume: 1.0,
         subdivision: 1,
+        fx: makeDefaultFx(),
         vertices: [
           { pitches: [60], velocity: 100, muted: false, subs: [] },
           { pitches: [64], velocity: 85, muted: false, subs: [] },
@@ -39,10 +40,7 @@ function createDefaultState() {
     activeSceneIndex: 0,
     enabledSlots: [true, false, false, false, false, false, false, false],
     scenes,
-    effects: {
-      reverbWet: 0.3,
-      delayWet: 0,
-    },
+    effects: makeDefaultMasterFx(),
     ui: {
       panelShapeId: null,
       panelSceneIndex: 0,
@@ -272,6 +270,57 @@ function base64Decode(b64) {
   return result;
 }
 
+// Validate + migrate scenes in place: clamp counts, fix vertex shape,
+// convert legacy single-pitch format. Shared by deserializeState and
+// projects.js loadProject so every load path applies the same rules.
+function sanitizeScenes(scenes) {
+  for (const scene of scenes) {
+    if (!scene.shapes) scene.shapes = [];
+    // Clamp shape count
+    if (scene.shapes.length > MAX_SHAPES) scene.shapes.length = MAX_SHAPES;
+    for (const shape of scene.shapes) {
+      if (!shape.id) shape.id = generateShapeId();
+      if (!shape.subdivision) shape.subdivision = 1;
+      shape.fx = { ...makeDefaultFx(), ...(shape.fx || {}) };
+      // Migrate the old single 'tone' knob into the full filter
+      if (shape.fx.tone !== undefined) {
+        if (shape.fx.cutoff === undefined || shape.fx.cutoff === 1) shape.fx.cutoff = shape.fx.tone;
+        delete shape.fx.tone;
+      }
+      // Clamp sides and subdivision
+      if (typeof shape.sides !== 'number' || !isFinite(shape.sides)) shape.sides = 3;
+      shape.sides = Math.max(2, Math.min(MAX_SIDES, shape.sides));
+      shape.subdivision = Math.max(1, Math.min(MAX_SUBDIVISION, shape.subdivision || 1));
+      // Validate vertices array
+      if (!Array.isArray(shape.vertices)) shape.vertices = [];
+      // Truncate vertices to match sides
+      if (shape.vertices.length > shape.sides) shape.vertices.length = shape.sides;
+      // Pad if too few
+      while (shape.vertices.length < shape.sides) {
+        shape.vertices.push({ pitches: [PITCH.defaultPitch], velocity: PITCH.defaultVelocity, muted: false, subs: [] });
+      }
+      for (const v of shape.vertices) {
+        if (v.pitch !== undefined && !v.pitches) {
+          v.pitches = [v.pitch];
+          delete v.pitch;
+        }
+        if (!v.pitches) v.pitches = [PITCH.defaultPitch];
+        if (v.velocity === undefined) v.velocity = PITCH.defaultVelocity;
+        if (v.muted === undefined) v.muted = false;
+        if (!v.subs) v.subs = [];
+        for (const sub of v.subs) {
+          if (!sub.pitches) sub.pitches = [PITCH.defaultPitch];
+          if (sub.velocity === undefined) sub.velocity = PITCH.defaultVelocity;
+          if (sub.muted === undefined) sub.muted = false;
+        }
+      }
+      if (shape.sides !== shape.vertices.length) {
+        shape.sides = shape.vertices.length;
+      }
+    }
+  }
+}
+
 function serializeState() {
   const toSerialize = {
     bpm: state.bpm,
@@ -303,44 +352,7 @@ function deserializeState(hash) {
     if (typeof parsed.activeSceneIndex !== 'number') throw new Error("Invalid activeSceneIndex");
     // Migrate old format and validate on parsed data first
     // Fix #7: Validate and clamp all numeric fields to prevent unbounded input
-    for (const scene of parsed.scenes) {
-      if (!scene.shapes) scene.shapes = [];
-      // Clamp shape count
-      if (scene.shapes.length > MAX_SHAPES) scene.shapes.length = MAX_SHAPES;
-      for (const shape of scene.shapes) {
-        if (!shape.subdivision) shape.subdivision = 1;
-        // Clamp sides and subdivision
-        if (typeof shape.sides !== 'number' || !isFinite(shape.sides)) shape.sides = 3;
-        shape.sides = Math.max(2, Math.min(MAX_SIDES, shape.sides));
-        shape.subdivision = Math.max(1, Math.min(MAX_SUBDIVISION, shape.subdivision || 1));
-        // Validate vertices array
-        if (!Array.isArray(shape.vertices)) shape.vertices = [];
-        // Truncate vertices to match sides
-        if (shape.vertices.length > shape.sides) shape.vertices.length = shape.sides;
-        // Pad if too few
-        while (shape.vertices.length < shape.sides) {
-          shape.vertices.push({ pitches: [PITCH.defaultPitch], velocity: PITCH.defaultVelocity, muted: false, subs: [] });
-        }
-        for (const v of shape.vertices) {
-          if (v.pitch !== undefined && !v.pitches) {
-            v.pitches = [v.pitch];
-            delete v.pitch;
-          }
-          if (!v.pitches) v.pitches = [PITCH.defaultPitch];
-          if (v.velocity === undefined) v.velocity = PITCH.defaultVelocity;
-          if (v.muted === undefined) v.muted = false;
-          if (!v.subs) v.subs = [];
-          for (const sub of v.subs) {
-            if (!sub.pitches) sub.pitches = [PITCH.defaultPitch];
-            if (sub.velocity === undefined) sub.velocity = PITCH.defaultVelocity;
-            if (sub.muted === undefined) sub.muted = false;
-          }
-        }
-        if (shape.sides !== shape.vertices.length) {
-          shape.sides = shape.vertices.length;
-        }
-      }
-    }
+    sanitizeScenes(parsed.scenes);
     // All validation passed — now assign to state
     state.bpm = parsed.bpm;
     state.scale = parsed.scale;
@@ -375,5 +387,6 @@ export {
   deleteScene,
   serializeState,
   deserializeState,
+  sanitizeScenes,
   createDefaultState,
 };

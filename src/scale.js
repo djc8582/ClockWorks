@@ -104,6 +104,12 @@ function detectScale() {
       }
     }
   }
+
+  // No match — clear any previous preset name so the Key button shows
+  // "Custom" instead of a stale scale name
+  updateState(s => {
+    s.ui.scaleName = null;
+  });
 }
 
 function setScalePreset(name, root) {

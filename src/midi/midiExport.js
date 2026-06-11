@@ -3,17 +3,29 @@ import { TIMING } from '../constants.js';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 
-export async function exportMIDI() {
-  try {
+// General MIDI percussion notes for the 4 drum slots (kick, snare, hihat, perc)
+const GM_DRUM_NOTES = [36, 38, 42, 39];
+
+// Melodic channels 1-16, skipping 10 (reserved for percussion in GM)
+function melodicChannel(trackIndex) {
+  const usable = [1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 15, 16];
+  return usable[trackIndex % usable.length];
+}
+
+// Build the MIDI file as a data URI — pure (no file I/O, no share sheet),
+// so the self-test harness can validate it directly.
+export async function buildMidiDataUri(state) {
     // Dynamic import of midi-writer-js
     const MidiWriterModule = await import('midi-writer-js');
     const MidiWriter = MidiWriterModule.default || MidiWriterModule;
-    const state = getState();
-    if (!state.scenes || state.scenes.length === 0) return;
+    if (!state.scenes || state.scenes.length === 0) return null;
     const tracks = [];
 
-    const maxShapes = Math.max(0, ...state.scenes.map(s => s.shapes.length));
-    if (maxShapes === 0) return;
+    // Only export scenes that actually contain shapes — disabled/empty
+    // slots would otherwise become long stretches of silence
+    const scenes = state.scenes.filter(sc => sc.shapes && sc.shapes.length > 0);
+    const maxShapes = Math.max(0, ...scenes.map(s => s.shapes.length));
+    if (maxShapes === 0) return null;
 
     const ticksPerCycle = 128 * TIMING.defaultCycleBeats;
 
@@ -22,9 +34,10 @@ export async function exportMIDI() {
       track.setTempo(state.bpm);
 
       let tickOffset = 0;
-      for (const scene of state.scenes) {
+      for (const scene of scenes) {
         if (si < scene.shapes.length) {
           const shape = scene.shapes[si];
+          const isDrum = (shape.timbre || '').startsWith('drumkit');
           const sub = shape.subdivision || 1;
           const totalSteps = shape.sides * sub;
 
@@ -38,13 +51,18 @@ export async function exportMIDI() {
                 const pitches = step.pitches || [60];
                 const vel = step.velocity != null ? step.velocity : 85;
                 for (const pitch of pitches) {
+                  // Drum slots map to GM percussion on channel 10; melodic
+                  // pitches are rounded (MIDI has no fractional notes) + clamped
+                  const midiPitch = isDrum
+                    ? GM_DRUM_NOTES[((Math.round(pitch) % 4) + 4) % 4]
+                    : Math.max(0, Math.min(127, Math.round(pitch)));
                   const stepNum = vi * sub + s;
                   const noteEvent = new MidiWriter.NoteEvent({
-                    pitch: pitch,
+                    pitch: midiPitch,
                     duration: 'T' + Math.max(1, Math.round(ticksPerCycle / totalSteps * 0.8)),
                     velocity: Math.max(1, Math.round((vel / 127) * 100)),
                     startTick: tickOffset + (ci * ticksPerCycle) + Math.round(stepNum * ticksPerCycle / totalSteps),
-                    channel: si + 1,
+                    channel: isDrum ? 10 : melodicChannel(si),
                   });
                   track.addEvent(noteEvent);
                 }
@@ -59,7 +77,13 @@ export async function exportMIDI() {
     }
 
     const write = new MidiWriter.Writer(tracks);
-    const dataUri = write.dataUri();
+    return write.dataUri();
+}
+
+export async function exportMIDI() {
+  try {
+    const dataUri = await buildMidiDataUri(getState());
+    if (!dataUri) return;
 
     // Extract base64 data from data URI
     const base64Data = dataUri.split(',')[1];

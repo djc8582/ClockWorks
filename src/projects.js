@@ -1,6 +1,7 @@
 // Project save/load system — stores projects as JSON files in the app's document directory.
 import * as FileSystem from 'expo-file-system';
-import { getState, initState } from './state.js';
+import { getState, sanitizeScenes } from './state.js';
+import { MAX_SCENES, AUDIO, makeDefaultMasterFx } from './constants.js';
 
 const PROJECTS_DIR = FileSystem.documentDirectory + 'projects/';
 
@@ -48,14 +49,36 @@ export async function listProjects() {
 export async function loadProject(filename) {
   const raw = await FileSystem.readAsStringAsync(PROJECTS_DIR + filename);
   const data = JSON.parse(raw);
-  // Re-init state then apply the saved data
+
+  // Validate + migrate before touching state (same rules as deserializeState)
+  let scenes = Array.isArray(data.scenes) ? data.scenes : [{ shapes: [] }];
+  scenes = scenes.slice(0, MAX_SCENES);
+  while (scenes.length < MAX_SCENES) scenes.push({ shapes: [] });
+  sanitizeScenes(scenes);
+
+  let enabledSlots = Array.isArray(data.enabledSlots) ? data.enabledSlots.slice(0, MAX_SCENES) : [true];
+  while (enabledSlots.length < MAX_SCENES) enabledSlots.push(false);
+  enabledSlots = enabledSlots.map(Boolean);
+  enabledSlots[0] = true; // slot 1 is always enabled
+
   const state = getState();
-  state.bpm = data.bpm || 120;
-  state.scale = data.scale || [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
-  state.activeSceneIndex = Math.max(0, Math.min(data.activeSceneIndex || 0, (data.scenes || []).length - 1));
-  state.scenes = data.scenes || state.scenes;
-  state.enabledSlots = data.enabledSlots || [true, false, false, false, false, false, false, false];
-  if (data.effects) state.effects = data.effects;
+  state.bpm = (typeof data.bpm === 'number' && isFinite(data.bpm)) ? Math.max(AUDIO.minBpm, Math.min(AUDIO.maxBpm, data.bpm)) : 120;
+  state.scale = (Array.isArray(data.scale) && data.scale.length > 0) ? data.scale : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+  state.activeSceneIndex = Math.max(0, Math.min(data.activeSceneIndex || 0, scenes.length - 1));
+  state.scenes = scenes;
+  state.enabledSlots = enabledSlots;
+  state.effects = { ...makeDefaultMasterFx(), ...(data.effects || {}) };
+
+  // Point the editing panel at the loaded active scene — stale shape ids
+  // from the previous project would leave every canvas shape dimmed
+  if (state.ui) {
+    state.ui.panelSceneIndex = state.activeSceneIndex;
+    const shapes = scenes[state.activeSceneIndex]?.shapes || [];
+    state.ui.panelShapeId = shapes.length > 0 ? shapes[0].id : null;
+    state.ui.selectedNodeIndex = 0;
+    state.ui.selectedNotes = [];
+    state.ui.scaleName = null;
+  }
   return data.name || filename;
 }
 

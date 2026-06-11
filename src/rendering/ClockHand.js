@@ -22,8 +22,6 @@ function ClockHandInner({ angle, centerX, centerY, handLength }) {
     hl.value = handLength;
   }, [centerX, centerY, handLength]);
 
-  if (handLength <= 0) return null;
-
   const center = useDerivedValue(() => vec(cx.value, cy.value));
   const endPoint = useDerivedValue(() => {
     const a = angle.value;
@@ -41,6 +39,9 @@ function ClockHandInner({ angle, centerX, centerY, handLength }) {
   const tr7 = useDerivedValue(() => { const a = angle.value - TRAIL_ANGLE * TRAIL_FRACTIONS[7]; return vec(cx.value + Math.cos(a) * hl.value, cy.value + Math.sin(a) * hl.value); });
 
   const trails = [tr0, tr1, tr2, tr3, tr4, tr5, tr6, tr7];
+
+  // After all hooks — early returns above a hook violate the Rules of Hooks
+  if (handLength <= 0) return null;
 
   return (
     <Group>
