@@ -24,7 +24,8 @@ function getShapeName(sides) {
 function openFxPanel(target) {
   updateState(s => { s.ui.mixerOpen = false; });
   setTimeout(() => {
-    updateState(s => { s.ui.fxPanel = target; });
+    // Remember the rack came from the mixer so Done returns there
+    updateState(s => { s.ui.fxPanel = target; s.ui.fxReturnToMixer = true; });
   }, 300);
 }
 
@@ -86,19 +87,17 @@ export default function Mixer() {
 
         return (
           <View key={shape.id} style={[styles.channel, { backgroundColor: color.fill }]}>
-            <View style={styles.channelHeader}>
+            {/* Whole header is the FX tap target — much easier than the chip */}
+            <Pressable style={styles.channelHeader} onPress={() => openFxPanel(shape.id)} hitSlop={4}>
               <View style={[styles.colorDot, { backgroundColor: color.main }]} />
               <Text style={styles.channelName}>{getShapeName(shape.sides)}</Text>
               <Text style={styles.channelTimbre}>{timbre ? timbre.label : ''}</Text>
-              <Pressable
-                style={[styles.fxChip, { backgroundColor: color.main }]}
-                onPress={() => openFxPanel(shape.id)}
-              >
+              <View style={[styles.fxChip, { backgroundColor: color.main }]}>
                 <Text style={styles.fxChipText}>
-                  {activeFx.length > 0 ? activeFx.join('·') : 'FX'}
+                  {activeFx.length > 0 ? activeFx.join('·') : 'FX ›'}
                 </Text>
-              </Pressable>
-            </View>
+              </View>
+            </Pressable>
             <Fader label="Vol" value={vol} color={color.main}
               onChange={(v) => onVolumeChange(shape.id, v)} />
             <Fader label="Pan" value={fx.pan} min={-1} max={1} color={color.main}

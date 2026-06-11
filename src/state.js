@@ -53,6 +53,7 @@ function createDefaultState() {
       clockAngle: -Math.PI / 2,
       mixerOpen: false,
       fxPanel: null, // null | 'master' | shapeId — drives the FX rack modal
+      fxReturnToMixer: false, // Done reopens the mixer when the rack came from it
       audioStarted: false,
       playing: false,
       ghostRingHover: false,

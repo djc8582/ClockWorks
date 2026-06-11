@@ -43,6 +43,18 @@ function toneToHz(t, lo = 300, hi = 18000) {
 
 const resToQ = dspResToQ;
 
+// AudioParam .value GETTERS are unreliable on react-native-audio-api 0.6.5
+// (same reason masterGainValue is tracked in JS) — reading one as a ramp
+// anchor can poison the param with NaN → buzzing filters, dead controls.
+// Every ramp anchors from a JS-tracked value instead.
+function rampParam(param, from, to, now) {
+  param.setValueAtTime(from, now);
+  param.linearRampToValueAtTime(to, now + 0.04);
+}
+
+// JS-tracked current values for the master fx graph
+let masterCur = null;
+
 // Shape filter cutoff (with legacy 'tone' fallback) — 80Hz..18kHz so
 // highpass sweeps have somewhere to live
 function shapeCutoffHz(fx) {
@@ -63,14 +75,16 @@ function createEqNodes() {
   return { low: mk(EQ_BANDS.low), mid: mk(EQ_BANDS.mid), high: mk(EQ_BANDS.high) };
 }
 
-function rampEq(eq, fxLike, now) {
-  const set = (node, v) => {
-    node.gain.setValueAtTime(node.gain.value, now);
-    node.gain.linearRampToValueAtTime(eqGainDb(v), now + 0.04);
+// cur = JS-tracked {eqLow, eqMid, eqHigh} in dB — never read node.gain.value
+function rampEq(eq, cur, fxLike, now) {
+  const set = (node, key, v) => {
+    const target = eqGainDb(v);
+    rampParam(node.gain, cur[key], target, now);
+    cur[key] = target;
   };
-  set(eq.low, fxLike.eqLow);
-  set(eq.mid, fxLike.eqMid);
-  set(eq.high, fxLike.eqHigh);
+  set(eq.low, 'eqLow', fxLike.eqLow);
+  set(eq.mid, 'eqMid', fxLike.eqMid);
+  set(eq.high, 'eqHigh', fxLike.eqHigh);
 }
 
 function getMasterFx() {
@@ -171,6 +185,14 @@ async function doInitAudio() {
     verbIn.connect(verbTone);
     verbTone.connect(verbLevel);
     verbLevel.connect(masterGain);
+
+    // JS-tracked applied values for every master param we ever ramp
+    masterCur = {
+      toneHz: toneToHz(1),
+      echoWet: makeDefaultMasterFx().delayWet,
+      verbWet: makeDefaultMasterFx().reverbWet,
+      eqLow: 0, eqMid: 0, eqHigh: 0,
+    };
 
     // Wait for ALL samples to be decoded before marking as ready
     await initSampleBank(audioContext);
@@ -295,7 +317,19 @@ function getChannel(shape) {
       eq.high.connect(filter);
       filter.connect(panner);
       panner.connect(masterGain);
-      ch = { input, eq, filter, panner };
+      // cur: JS-tracked applied values — ramp anchors (never .value getters)
+      ch = {
+        input, eq, filter, panner,
+        cur: {
+          vol: shape.volume != null ? shape.volume : 1,
+          hz: shapeCutoffHz(fx),
+          q: resToQ(fx.res),
+          pan: fx.pan,
+          eqLow: eqGainDb(fx.eqLow),
+          eqMid: eqGainDb(fx.eqMid),
+          eqHigh: eqGainDb(fx.eqHigh),
+        },
+      };
       channels.set(shape.id, ch);
     } catch (e) {
       return null;
@@ -311,18 +345,22 @@ function applyChannelFx(shape) {
   const fx = getShapeFx(shape);
   const now = audioContext.currentTime;
   try {
+    const c = ch.cur;
     const vol = shape.volume != null ? shape.volume : 1;
-    ch.input.gain.setValueAtTime(ch.input.gain.value, now);
-    ch.input.gain.linearRampToValueAtTime(vol, now + 0.04);
-    rampEq(ch.eq, fx, now);
+    rampParam(ch.input.gain, c.vol, vol, now);
+    c.vol = vol;
+    rampEq(ch.eq, c, fx, now);
     const type = fx.filterType || 'lowpass';
     if (ch.filter.type !== type) ch.filter.type = type; // discrete — no ramp
-    ch.filter.frequency.setValueAtTime(ch.filter.frequency.value, now);
-    ch.filter.frequency.linearRampToValueAtTime(shapeCutoffHz(fx), now + 0.04);
-    ch.filter.Q.setValueAtTime(ch.filter.Q.value, now);
-    ch.filter.Q.linearRampToValueAtTime(resToQ(fx.res), now + 0.04);
-    ch.panner.pan.setValueAtTime(ch.panner.pan.value, now);
-    ch.panner.pan.linearRampToValueAtTime(Math.max(-1, Math.min(1, fx.pan)), now + 0.04);
+    const hz = shapeCutoffHz(fx);
+    rampParam(ch.filter.frequency, c.hz, hz, now);
+    c.hz = hz;
+    const q = resToQ(fx.res);
+    rampParam(ch.filter.Q, c.q, q, now);
+    c.q = q;
+    const pan = Math.max(-1, Math.min(1, fx.pan));
+    rampParam(ch.panner.pan, c.pan, pan, now);
+    c.pan = pan;
   } catch (e) {}
 }
 
@@ -520,13 +558,17 @@ function applyMasterFx() {
   const m = getMasterFx();
   const now = audioContext.currentTime;
   try {
-    if (masterEq) rampEq(masterEq, m, now);
-    masterTone.frequency.setValueAtTime(masterTone.frequency.value, now);
-    masterTone.frequency.linearRampToValueAtTime(toneToHz(m.tone, 300, 20000), now + 0.04);
-    echoLevel.gain.setValueAtTime(echoLevel.gain.value, now);
-    echoLevel.gain.linearRampToValueAtTime(Math.max(0, Math.min(1, m.delayWet)), now + 0.04);
-    verbLevel.gain.setValueAtTime(verbLevel.gain.value, now);
-    verbLevel.gain.linearRampToValueAtTime(Math.max(0, Math.min(1, m.reverbWet)), now + 0.04);
+    if (!masterCur) return;
+    if (masterEq) rampEq(masterEq, masterCur, m, now);
+    const toneHz = toneToHz(m.tone, 300, 20000);
+    rampParam(masterTone.frequency, masterCur.toneHz, toneHz, now);
+    masterCur.toneHz = toneHz;
+    const echoWet = Math.max(0, Math.min(1, m.delayWet));
+    rampParam(echoLevel.gain, masterCur.echoWet, echoWet, now);
+    masterCur.echoWet = echoWet;
+    const verbWet = Math.max(0, Math.min(1, m.reverbWet));
+    rampParam(verbLevel.gain, masterCur.verbWet, verbWet, now);
+    masterCur.verbWet = verbWet;
   } catch (e) {}
 }
 

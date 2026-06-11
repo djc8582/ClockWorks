@@ -78,7 +78,14 @@ export default function EffectsPanel() {
   const accent = color ? color.main : COLORS.text;
   const shapeId = shape ? shape.id : null;
 
-  const onClose = () => updateState(s => { s.ui.fxPanel = null; });
+  const returnToMixer = useStore(s => !!s.ui.fxReturnToMixer);
+  const onClose = () => {
+    updateState(s => { s.ui.fxPanel = null; s.ui.fxReturnToMixer = false; });
+    if (returnToMixer) {
+      // Reopen the mixer after this modal's dismiss animation
+      setTimeout(() => updateState(s => { s.ui.mixerOpen = true; }), 300);
+    }
+  };
   const toggle = (key) => setOpen(open === key ? null : key);
 
   return (
