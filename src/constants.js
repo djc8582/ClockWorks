@@ -131,6 +131,9 @@ export const AUDIO = {
 export function makeDefaultFx() {
   return {
     pan: 0,                 // -1..1
+    eqLow: 0,               // -1..1 → ±12dB lowshelf @120Hz
+    eqMid: 0,               // -1..1 → ±12dB peaking @1.2kHz
+    eqHigh: 0,              // -1..1 → ±12dB highshelf @6kHz
     filterType: 'lowpass',  // 'lowpass' | 'highpass' | 'bandpass'
     cutoff: 1,              // 0..1 → 80Hz..18kHz log (1 = open lowpass)
     res: 0,                 // 0..1 → filter Q 0.707..8 (resonance)
@@ -146,6 +149,9 @@ export function makeDefaultMasterFx() {
   return {
     volume: 1,        // 0..1 master level (scaled by auto-headroom)
     tone: 1,          // master lowpass, 0..1
+    eqLow: 0,         // master 3-band EQ, -1..1 → ±12dB
+    eqMid: 0,
+    eqHigh: 0,
     delayTime: 0.25,  // echo tap spacing in seconds (0.05..0.7)
     delayFeedback: 0.45, // per-tap decay (0..0.85)
     delayWet: 0.5,    // echo bus return level

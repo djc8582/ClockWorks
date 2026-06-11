@@ -1,15 +1,19 @@
-// Openable FX rack — every effect is a tappable card that expands into
-// its full editor. Used for both per-track effects (shapeId) and the
-// master bus (shapeId == null). All changes apply live via ramps.
+// Openable FX racks v2 — every effect leads with an interactive Skia
+// visualizer (GarageBand-style: edit by dragging the response itself),
+// with precise sliders underneath. Driven by global ui.fxPanel state
+// ('master' | shapeId | null) so any surface can open it.
 import React, { useState } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, Modal } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { COLORS, UI, FILTER_TYPES, makeDefaultFx, makeDefaultMasterFx } from '../constants.js';
 import { useStore } from '../hooks/useStore.js';
+import { updateState } from '../state.js';
 import { setShapeFx, setMasterFx } from '../audio/audioEngine.js';
+import { cutoffToHz } from '../audio/dsp.js';
+import { FilterViz, EqViz, DriveViz, EchoViz, ReverbViz } from './FxViz.js';
 
-function hzLabel(t, lo = 80, hi = 18000) {
-  const hz = lo * Math.pow(hi / lo, Math.max(0, Math.min(1, t)));
+function hzLabel(norm) {
+  const hz = cutoffToHz(norm);
   return hz >= 1000 ? (hz / 1000).toFixed(1) + 'k' : Math.round(hz) + '';
 }
 
@@ -33,7 +37,7 @@ function Fader({ label, value, min = 0, max = 1, color, onChange, format }) {
 
 function EffectCard({ title, summary, color, expanded, onToggle, children }) {
   return (
-    <View style={[styles.card, expanded && { backgroundColor: color + '14' }]}>
+    <View style={[styles.card, expanded && { backgroundColor: color + '12' }]}>
       <Pressable style={styles.cardHeader} onPress={onToggle}>
         <Text style={styles.cardTitle}>{title}</Text>
         <Text style={[styles.cardSummary, { color }]}>{summary}</Text>
@@ -44,28 +48,37 @@ function EffectCard({ title, summary, color, expanded, onToggle, children }) {
   );
 }
 
-// shapeId: track rack; shapeId == null: master rack
-export default function EffectsPanel({ visible, onClose, shapeId, color }) {
-  const [open, setOpen] = useState('filter');
-  const accent = color ? color.main : COLORS.text;
+function eqSummary(v) {
+  const fmt = (x, name) => Math.abs(x) < 0.04 ? null : `${name}${x > 0 ? '+' : ''}${Math.round(x * 12)}`;
+  const parts = [fmt(v.eqLow, 'L'), fmt(v.eqMid, 'M'), fmt(v.eqHigh, 'H')].filter(Boolean);
+  return parts.length ? parts.join(' ') : 'flat';
+}
 
-  // Select RAW stable references only — getSnapshot must not allocate, or
-  // useSyncExternalStore sees a new object every call and loops forever.
-  // Defaults are merged during render instead.
-  const rawFx = useStore(s => {
-    if (!shapeId) return null;
+export default function EffectsPanel() {
+  const [open, setOpen] = useState('eq');
+  const fxPanel = useStore(s => s.ui.fxPanel || null);
+
+  // RAW stable refs only — allocating in a selector loops useSyncExternalStore
+  const shape = useStore(s => {
+    if (!fxPanel || fxPanel === 'master') return null;
     for (const scene of s.scenes) {
-      const sh = (scene.shapes || []).find(x => x.id === shapeId);
-      if (sh) return sh.fx;
+      const sh = (scene.shapes || []).find(x => x.id === fxPanel);
+      if (sh) return sh;
     }
     return null;
   });
   const rawEffects = useStore(s => s.effects);
-  const fx = shapeId ? { ...makeDefaultFx(), ...(rawFx || {}) } : null;
-  const master = { ...makeDefaultMasterFx(), ...(rawEffects || {}) };
 
+  const isMaster = fxPanel === 'master';
+  const visible = fxPanel !== null && (isMaster || !!shape);
+  const fx = shape ? { ...makeDefaultFx(), ...(shape.fx || {}) } : makeDefaultFx();
+  const master = { ...makeDefaultMasterFx(), ...(rawEffects || {}) };
+  const color = shape ? COLORS.shapes[shape.colorIndex % COLORS.shapes.length] : null;
+  const accent = color ? color.main : COLORS.text;
+  const shapeId = shape ? shape.id : null;
+
+  const onClose = () => updateState(s => { s.ui.fxPanel = null; });
   const toggle = (key) => setOpen(open === key ? null : key);
-  const isMaster = !shapeId;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -74,7 +87,20 @@ export default function EffectsPanel({ visible, onClose, shapeId, color }) {
           <Text style={styles.title}>{isMaster ? 'Master Effects' : 'Track Effects'}</Text>
           <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
 
-            {!isMaster && fx && (
+            {/* EQ — both track and master */}
+            <EffectCard
+              title="EQ" color={accent}
+              summary={eqSummary(isMaster ? master : fx)}
+              expanded={open === 'eq'} onToggle={() => toggle('eq')}
+            >
+              <EqViz
+                values={isMaster ? master : fx}
+                color={accent}
+                onChange={(patch) => isMaster ? setMasterFx(patch) : setShapeFx(shapeId, patch)}
+              />
+            </EffectCard>
+
+            {!isMaster && (
               <>
                 <EffectCard
                   title="Filter" color={accent}
@@ -94,6 +120,8 @@ export default function EffectsPanel({ visible, onClose, shapeId, color }) {
                       </Pressable>
                     ))}
                   </View>
+                  <FilterViz fx={fx} color={accent}
+                    onChange={(patch) => setShapeFx(shapeId, patch)} />
                   <Fader label="Cutoff" value={fx.cutoff} color={accent} format={(v) => hzLabel(v) + 'Hz'}
                     onChange={(v) => setShapeFx(shapeId, { cutoff: Math.round(v * 100) / 100 })} />
                   <Fader label="Res" value={fx.res} color={accent}
@@ -105,9 +133,9 @@ export default function EffectsPanel({ visible, onClose, shapeId, color }) {
                   summary={fx.drive < 0.15 ? 'off' : fx.drive < 0.6 ? 'warm' : 'hot'}
                   expanded={open === 'drive'} onToggle={() => toggle('drive')}
                 >
+                  <DriveViz drive={fx.drive} color={accent} />
                   <Fader label="Amount" value={fx.drive} color={accent}
                     onChange={(v) => setShapeFx(shapeId, { drive: Math.round(v * 100) / 100 })} />
-                  <Text style={styles.hint}>tanh saturation — warm above 15%, hot above 60%</Text>
                 </EffectCard>
 
                 <EffectCard
@@ -115,14 +143,10 @@ export default function EffectsPanel({ visible, onClose, shapeId, color }) {
                   summary={fx.echoSend < 0.01 ? 'off' : `send ${Math.round(fx.echoSend * 100)} · ${Math.round(master.delayTime * 1000)}ms`}
                   expanded={open === 'echo'} onToggle={() => toggle('echo')}
                 >
+                  <EchoViz send={fx.echoSend} time={master.delayTime} feedback={master.delayFeedback}
+                    color={accent} onChange={(patch) => setMasterFx(patch)} />
                   <Fader label="Send" value={fx.echoSend} color={accent}
                     onChange={(v) => setShapeFx(shapeId, { echoSend: Math.round(v * 100) / 100 })} />
-                  <Text style={styles.hint}>shared bus (ping-pong)</Text>
-                  <Fader label="Time" value={master.delayTime} min={0.05} max={0.7} color={accent}
-                    format={(v) => Math.round(v * 1000) + 'ms'}
-                    onChange={(v) => setMasterFx({ delayTime: Math.round(v * 100) / 100 })} />
-                  <Fader label="Fdbk" value={master.delayFeedback} max={0.85} color={accent}
-                    onChange={(v) => setMasterFx({ delayFeedback: Math.round(v * 100) / 100 })} />
                   <Fader label="Level" value={master.delayWet} color={accent}
                     onChange={(v) => setMasterFx({ delayWet: Math.round(v * 100) / 100 })} />
                 </EffectCard>
@@ -132,9 +156,9 @@ export default function EffectsPanel({ visible, onClose, shapeId, color }) {
                   summary={fx.verbSend < 0.01 ? 'off' : `send ${Math.round(fx.verbSend * 100)}`}
                   expanded={open === 'verb'} onToggle={() => toggle('verb')}
                 >
+                  <ReverbViz send={fx.verbSend} color={accent} />
                   <Fader label="Send" value={fx.verbSend} color={accent}
                     onChange={(v) => setShapeFx(shapeId, { verbSend: Math.round(v * 100) / 100 })} />
-                  <Text style={styles.hint}>shared bus (diffuse plate)</Text>
                   <Fader label="Level" value={master.reverbWet} color={accent}
                     onChange={(v) => setMasterFx({ reverbWet: Math.round(v * 100) / 100 })} />
                 </EffectCard>
@@ -144,19 +168,12 @@ export default function EffectsPanel({ visible, onClose, shapeId, color }) {
             {isMaster && (
               <>
                 <EffectCard
-                  title="Tone" color={accent}
-                  summary={hzLabel(master.tone, 300, 20000) + 'Hz'}
-                  expanded={open === 'filter'} onToggle={() => toggle('filter')}
-                >
-                  <Fader label="Cutoff" value={master.tone} color={accent} format={(v) => hzLabel(v, 300, 20000) + 'Hz'}
-                    onChange={(v) => setMasterFx({ tone: Math.round(v * 100) / 100 })} />
-                </EffectCard>
-
-                <EffectCard
                   title="Echo" color={COLORS.shapes[1].main}
-                  summary={`${Math.round(master.delayTime * 1000)}ms · fdbk ${Math.round(master.delayFeedback * 100)} · ${Math.round(master.delayWet * 100)}`}
+                  summary={`${Math.round(master.delayTime * 1000)}ms · fdbk ${Math.round(master.delayFeedback * 100)}`}
                   expanded={open === 'echo'} onToggle={() => toggle('echo')}
                 >
+                  <EchoViz send={0.8} time={master.delayTime} feedback={master.delayFeedback}
+                    color={COLORS.shapes[1].main} onChange={(patch) => setMasterFx(patch)} />
                   <Fader label="Time" value={master.delayTime} min={0.05} max={0.7} color={COLORS.shapes[1].main}
                     format={(v) => Math.round(v * 1000) + 'ms'}
                     onChange={(v) => setMasterFx({ delayTime: Math.round(v * 100) / 100 })} />
@@ -171,17 +188,20 @@ export default function EffectsPanel({ visible, onClose, shapeId, color }) {
                   summary={`level ${Math.round(master.reverbWet * 100)}`}
                   expanded={open === 'verb'} onToggle={() => toggle('verb')}
                 >
+                  <ReverbViz send={0.8} color={COLORS.shapes[3].main} />
                   <Fader label="Level" value={master.reverbWet} color={COLORS.shapes[3].main}
                     onChange={(v) => setMasterFx({ reverbWet: Math.round(v * 100) / 100 })} />
                 </EffectCard>
 
                 <EffectCard
-                  title="Volume" color={accent}
-                  summary={Math.round(master.volume * 100) + ''}
-                  expanded={open === 'vol'} onToggle={() => toggle('vol')}
+                  title="Output" color={accent}
+                  summary={`vol ${Math.round(master.volume * 100)} · tone ${Math.round(master.tone * 100)}`}
+                  expanded={open === 'out'} onToggle={() => toggle('out')}
                 >
-                  <Fader label="Master" value={master.volume} color={accent}
+                  <Fader label="Volume" value={master.volume} color={accent}
                     onChange={(v) => setMasterFx({ volume: Math.round(v * 100) / 100 })} />
+                  <Fader label="Tone" value={master.tone} color={accent}
+                    onChange={(v) => setMasterFx({ tone: Math.round(v * 100) / 100 })} />
                 </EffectCard>
               </>
             )}
@@ -204,7 +224,7 @@ const styles = StyleSheet.create({
   },
   panel: {
     width: 310,
-    maxHeight: '78%',
+    maxHeight: '82%',
     backgroundColor: COLORS.panelBg,
     borderRadius: 24,
     padding: 14,
@@ -237,7 +257,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     color: COLORS.text,
-    width: 70,
+    width: 60,
   },
   cardSummary: {
     flex: 1,
@@ -256,7 +276,7 @@ const styles = StyleSheet.create({
   typeRow: {
     flexDirection: 'row',
     gap: 8,
-    marginBottom: 6,
+    marginBottom: 8,
   },
   typeBtn: {
     paddingHorizontal: 16,
@@ -290,12 +310,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.textDim,
     textAlign: 'right',
-  },
-  hint: {
-    fontSize: 9,
-    color: COLORS.textDim,
-    marginBottom: 4,
-    marginLeft: 44,
   },
   doneBtn: {
     marginTop: 10,

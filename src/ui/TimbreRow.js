@@ -4,7 +4,6 @@ import { COLORS, UI, TIMBRES, DRUM_TIMBRES, SCALE_CATEGORIES, NO_TRANSPOSE_SCALE
 import { updateState, safePanelScene } from '../state.js';
 import { swapTimbre, rescheduleAll } from '../audio/audioEngine.js';
 import { setScalePreset, getCurrentScaleName } from '../scale.js';
-import EffectsPanel from './EffectsPanel.js';
 
 // Group timbres by category
 function groupByCategory(timbres) {
@@ -21,7 +20,6 @@ export default function TimbreRow({ shape, color }) {
   const [instrumentVisible, setInstrumentVisible] = useState(false);
   const [scalePhase, setScalePhase] = useState(null); // null | 'scale' | 'root'
   const [pendingScale, setPendingScale] = useState(null);
-  const [fxVisible, setFxVisible] = useState(false);
 
   const grouped = useMemo(() => groupByCategory(TIMBRES), []);
 
@@ -116,20 +114,12 @@ export default function TimbreRow({ shape, color }) {
 
         <Pressable
           style={[styles.fxBtn, { backgroundColor: color.fill }]}
-          onPress={() => setFxVisible(true)}
+          onPress={() => updateState(s => { s.ui.fxPanel = shape.id; })}
         >
           <Text style={styles.sectionLabel}>FX</Text>
           <Text style={[styles.sectionValue, { color: color.main }]}>{'♫'}</Text>
         </Pressable>
       </View>
-
-      {/* Per-track effects rack */}
-      <EffectsPanel
-        visible={fxVisible}
-        onClose={() => setFxVisible(false)}
-        shapeId={shape.id}
-        color={color}
-      />
 
       {/* Instrument picker — large categorized modal */}
       <Modal

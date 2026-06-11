@@ -25,6 +25,7 @@ import { buildMidiDataUri } from './midi/midiExport.js';
 import { renderAudioMix, setSampleBanks } from './export/audioExport.js';
 import { buildSheetHTML } from './export/sheetExport.js';
 import { rebuildPlaybackOrder, resetCycleCount, getSceneForCycle } from './sequencer.js';
+import { biquadCoeffs, magnitudeAt, EQ_BANDS } from './audio/dsp.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -393,6 +394,36 @@ export async function runSelfTest() {
     return after.pan === 0 && after.echoSend === 0 && after.filterType === 'lowpass';
   });
 
+  await check('fx: EQ biquad math is correct (RBJ peaks where it should)', () => {
+    // +12dB peaking @1.2kHz must measure ≈ +12dB at center, ≈ 0dB far away
+    const c = biquadCoeffs('peaking', EQ_BANDS.mid.freq, EQ_BANDS.mid.Q, 12);
+    const atCenter = 20 * Math.log10(magnitudeAt(c, EQ_BANDS.mid.freq));
+    const farAway = 20 * Math.log10(magnitudeAt(c, 40));
+    if (Math.abs(atCenter - 12) > 0.5 || Math.abs(farAway) > 1) return false;
+    // lowshelf -12dB: low freqs cut, highs untouched
+    const ls = biquadCoeffs('lowshelf', EQ_BANDS.low.freq, 0.707, -12);
+    const lo = 20 * Math.log10(magnitudeAt(ls, 30));
+    const hi = 20 * Math.log10(magnitudeAt(ls, 10000));
+    return lo < -10 && Math.abs(hi) < 1;
+  });
+
+  await check('fx: EQ audibly changes the bounce', () => {
+    setSampleBanks(getSampleBank(), getDrumBank());
+    const prev = { ...getState().scenes[0].shapes[0].fx };
+    const flat = renderAudioMix(getState(), 1);
+    updateState(s => { s.scenes[0].shapes[0].fx = { ...s.scenes[0].shapes[0].fx, eqLow: -1, eqHigh: 1 }; });
+    const eqd = renderAudioMix(getState(), 1);
+    updateState(s => { s.scenes[0].shapes[0].fx = prev; });
+    if (!flat || !eqd) return false;
+    let diff = 0, energy = 0;
+    const n = Math.min(flat.left.length, eqd.left.length);
+    for (let i = 0; i < n; i++) {
+      diff += Math.abs(flat.left[i] - eqd.left[i]);
+      energy += Math.abs(flat.left[i]);
+    }
+    return energy > 0 && diff / energy > 0.05;
+  });
+
   await check('fx: legacy tone migrates to filter cutoff', () => {
     const scenes = [{ shapes: [{ sides: 3, vertices: [], fx: { tone: 0.4 } }] }];
     sanitizeScenes(scenes);
@@ -435,6 +466,13 @@ export async function runSelfTest() {
   updateState(s => { s.ui.addPanelOpen = true; s.ui.addPanelSides = 5; });
   await sleep(3000);
   updateState(s => { s.ui.addPanelOpen = false; });
+  console.log('[SELFTEST] UI walk: track fx open');
+  updateState(s => { s.ui.fxPanel = s.scenes[0].shapes[0]?.id || null; });
+  await sleep(3000);
+  console.log('[SELFTEST] UI walk: master fx open');
+  updateState(s => { s.ui.fxPanel = 'master'; });
+  await sleep(3000);
+  updateState(s => { s.ui.fxPanel = null; });
   console.log('[SELFTEST] UI walk: done');
 
   // Restore a pristine default state — the suite mutates pitches/scales

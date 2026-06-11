@@ -1,11 +1,10 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useRef, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { COLORS, UI, TIMBRES, makeDefaultFx } from '../constants.js';
 import { updateState, safeActiveScene } from '../state.js';
 import { rescheduleAll, setShapeFx } from '../audio/audioEngine.js';
 import { useStore } from '../hooks/useStore.js';
-import EffectsPanel from './EffectsPanel.js';
 
 const EMPTY_SHAPES = [];
 
@@ -39,8 +38,6 @@ function Fader({ label, value, min = 0, max = 1, color, onChange, format }) {
 export default function Mixer() {
   const shapes = useStore(s => s.scenes[s.activeSceneIndex]?.shapes || EMPTY_SHAPES);
   const rescheduleTimer = useRef(null);
-  // null = closed, 'master' = master rack, otherwise a shape id
-  const [fxTarget, setFxTarget] = useState(null);
 
   useEffect(() => () => clearTimeout(rescheduleTimer.current), []);
 
@@ -59,13 +56,6 @@ export default function Mixer() {
     }
   }
 
-  const fxShape = fxTarget && fxTarget !== 'master'
-    ? shapes.find(sh => sh.id === fxTarget)
-    : null;
-  const fxColor = fxShape
-    ? COLORS.shapes[fxShape.colorIndex % COLORS.shapes.length]
-    : null;
-
   return (
     <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
       {shapes.length === 0 && <Text style={styles.empty}>No shapes</Text>}
@@ -76,6 +66,7 @@ export default function Mixer() {
         const fx = { ...makeDefaultFx(), ...(shape.fx || {}) };
         const vol = shape.volume != null ? shape.volume : 1;
         const activeFx = [
+          Math.abs(fx.eqLow) > 0.04 || Math.abs(fx.eqMid) > 0.04 || Math.abs(fx.eqHigh) > 0.04 ? 'EQ' : null,
           fx.cutoff < 0.99 || fx.res > 0.05 || fx.filterType !== 'lowpass' ? 'FLT' : null,
           fx.drive >= 0.15 ? 'DRV' : null,
           fx.echoSend > 0.01 ? 'ECH' : null,
@@ -90,7 +81,7 @@ export default function Mixer() {
               <Text style={styles.channelTimbre}>{timbre ? timbre.label : ''}</Text>
               <Pressable
                 style={[styles.fxChip, { backgroundColor: color.main }]}
-                onPress={() => setFxTarget(shape.id)}
+                onPress={() => updateState(s => { s.ui.fxPanel = shape.id; })}
               >
                 <Text style={styles.fxChipText}>
                   {activeFx.length > 0 ? activeFx.join('·') : 'FX'}
@@ -107,19 +98,11 @@ export default function Mixer() {
       })}
 
       {/* Master */}
-      <Pressable style={styles.master} onPress={() => setFxTarget('master')}>
+      <Pressable style={styles.master} onPress={() => updateState(s => { s.ui.fxPanel = 'master'; })}>
         <Text style={styles.masterTitle}>Master</Text>
-        <Text style={styles.masterHint}>tone · echo · reverb · volume</Text>
+        <Text style={styles.masterHint}>eq · echo · reverb · output</Text>
         <Text style={styles.masterChevron}>{'›'}</Text>
       </Pressable>
-
-      {/* FX racks */}
-      <EffectsPanel
-        visible={fxTarget !== null}
-        onClose={() => setFxTarget(null)}
-        shapeId={fxTarget === 'master' ? null : fxTarget}
-        color={fxColor}
-      />
     </ScrollView>
   );
 }

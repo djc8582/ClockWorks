@@ -18,6 +18,7 @@ import PanelHeader from './src/ui/PanelHeader.js';
 import TimbreRow from './src/ui/TimbreRow.js';
 import PianoRoll from './src/ui/PianoRoll.js';
 import Mixer from './src/ui/Mixer.js';
+import EffectsPanel from './src/ui/EffectsPanel.js';
 
 // Initialize state on module load
 initState();
@@ -244,6 +245,9 @@ function AppContent() {
           </View>
         </Pressable>
       </Modal>
+
+      {/* FX rack — single global instance driven by ui.fxPanel */}
+      <EffectsPanel />
 
       {/* Add shape panel overlay */}
       {addPanelOpen && (

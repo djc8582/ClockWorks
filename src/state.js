@@ -52,6 +52,7 @@ function createDefaultState() {
       rollZoomV: 1.0,
       clockAngle: -Math.PI / 2,
       mixerOpen: false,
+      fxPanel: null, // null | 'master' | shapeId — drives the FX rack modal
       audioStarted: false,
       playing: false,
       ghostRingHover: false,

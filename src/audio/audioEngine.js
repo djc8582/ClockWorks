@@ -4,6 +4,7 @@ import { getState, getShapes, updateState } from '../state.js';
 import { TIMING, AUDIO, makeDefaultFx, makeDefaultMasterFx } from '../constants.js';
 import { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices, getActiveVoiceCount, getMaxVoices } from './timbres.js';
 import { createScheduler } from './scheduler.js';
+import { EQ_BANDS, eqGainDb, cutoffToHz, resToQ as dspResToQ } from './dsp.js';
 
 let audioContext = null;
 let scheduler = null;
@@ -29,9 +30,10 @@ const MAX_NOTES_PER_TICK = 12;
 //  verb taps  → verbIn → verbTone → verbLevel → masterInput
 //  masterInput(headroom × master volume) → masterTone → destination
 let masterTone = null;
+let masterEq = null;
 let echoPanL = null, echoPanR = null, echoTone = null, echoLevel = null;
 let verbIn = null, verbTone = null, verbLevel = null;
-const channels = new Map(); // shape.id → { input, filter, panner }
+const channels = new Map(); // shape.id → { input, eq, filter, panner }
 
 // tone 0..1 → cutoff Hz on a log scale
 function toneToHz(t, lo = 300, hi = 18000) {
@@ -39,17 +41,36 @@ function toneToHz(t, lo = 300, hi = 18000) {
   return lo * Math.pow(hi / lo, x);
 }
 
-// res 0..1 → biquad Q: Butterworth-flat at 0, screaming at 1
-function resToQ(r) {
-  const x = Math.max(0, Math.min(1, Number(r) || 0));
-  return 0.707 + x * 7.3;
-}
+const resToQ = dspResToQ;
 
 // Shape filter cutoff (with legacy 'tone' fallback) — 80Hz..18kHz so
 // highpass sweeps have somewhere to live
 function shapeCutoffHz(fx) {
   const c = fx.cutoff !== undefined ? fx.cutoff : (fx.tone !== undefined ? fx.tone : 1);
-  return toneToHz(c, 80, 18000);
+  return cutoffToHz(c);
+}
+
+// Build the 3 EQ biquads (lowshelf/peaking/highshelf) used by every strip
+function createEqNodes() {
+  const mk = (band) => {
+    const n = audioContext.createBiquadFilter();
+    n.type = band.type;
+    n.frequency.value = band.freq;
+    n.Q.value = band.Q || 0.707;
+    n.gain.value = 0;
+    return n;
+  };
+  return { low: mk(EQ_BANDS.low), mid: mk(EQ_BANDS.mid), high: mk(EQ_BANDS.high) };
+}
+
+function rampEq(eq, fxLike, now) {
+  const set = (node, v) => {
+    node.gain.setValueAtTime(node.gain.value, now);
+    node.gain.linearRampToValueAtTime(eqGainDb(v), now + 0.04);
+  };
+  set(eq.low, fxLike.eqLow);
+  set(eq.mid, fxLike.eqMid);
+  set(eq.high, fxLike.eqHigh);
 }
 
 function getMasterFx() {
@@ -115,7 +136,11 @@ async function doInitAudio() {
     masterTone.type = 'lowpass';
     masterTone.frequency.value = toneToHz(1);
     masterTone.Q.value = 0.707; // Butterworth — flat response, no resonance (tiny Q makes biquads degenerate/crunchy)
-    masterGain.connect(masterTone);
+    masterEq = createEqNodes();
+    masterGain.connect(masterEq.low);
+    masterEq.low.connect(masterEq.mid);
+    masterEq.mid.connect(masterEq.high);
+    masterEq.high.connect(masterTone);
     masterTone.connect(audioContext.destination);
 
     // Echo bus: ping-pong panners → darkening filter → return level → master
@@ -254,16 +279,23 @@ function getChannel(shape) {
       const fx = getShapeFx(shape);
       const input = audioContext.createGain();
       input.gain.value = shape.volume != null ? shape.volume : 1;
+      const eq = createEqNodes();
+      eq.low.gain.value = eqGainDb(fx.eqLow);
+      eq.mid.gain.value = eqGainDb(fx.eqMid);
+      eq.high.gain.value = eqGainDb(fx.eqHigh);
       const filter = audioContext.createBiquadFilter();
       filter.type = fx.filterType || 'lowpass';
       filter.frequency.value = shapeCutoffHz(fx);
       filter.Q.value = resToQ(fx.res); // 0.707 floor — tiny Q makes biquads degenerate/crunchy
       const panner = audioContext.createStereoPanner();
       panner.pan.value = fx.pan;
-      input.connect(filter);
+      input.connect(eq.low);
+      eq.low.connect(eq.mid);
+      eq.mid.connect(eq.high);
+      eq.high.connect(filter);
       filter.connect(panner);
       panner.connect(masterGain);
-      ch = { input, filter, panner };
+      ch = { input, eq, filter, panner };
       channels.set(shape.id, ch);
     } catch (e) {
       return null;
@@ -282,6 +314,7 @@ function applyChannelFx(shape) {
     const vol = shape.volume != null ? shape.volume : 1;
     ch.input.gain.setValueAtTime(ch.input.gain.value, now);
     ch.input.gain.linearRampToValueAtTime(vol, now + 0.04);
+    rampEq(ch.eq, fx, now);
     const type = fx.filterType || 'lowpass';
     if (ch.filter.type !== type) ch.filter.type = type; // discrete — no ramp
     ch.filter.frequency.setValueAtTime(ch.filter.frequency.value, now);
@@ -307,6 +340,9 @@ function cleanupOrphanedChannels() {
     channels.delete(id);
     try { ch.panner.disconnect(); } catch (e) {}
     try { ch.filter.disconnect(); } catch (e) {}
+    try { ch.eq.high.disconnect(); } catch (e) {}
+    try { ch.eq.mid.disconnect(); } catch (e) {}
+    try { ch.eq.low.disconnect(); } catch (e) {}
     try { ch.input.disconnect(); } catch (e) {}
   }
 }
@@ -484,6 +520,7 @@ function applyMasterFx() {
   const m = getMasterFx();
   const now = audioContext.currentTime;
   try {
+    if (masterEq) rampEq(masterEq, m, now);
     masterTone.frequency.setValueAtTime(masterTone.frequency.value, now);
     masterTone.frequency.linearRampToValueAtTime(toneToHz(m.tone, 300, 20000), now + 0.04);
     echoLevel.gain.setValueAtTime(echoLevel.gain.value, now);

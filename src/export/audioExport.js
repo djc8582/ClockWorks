@@ -4,6 +4,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { getState } from '../state.js';
 import { TIMING, makeDefaultFx, makeDefaultMasterFx } from '../constants.js';
+import { biquadCoeffs, processBiquad, cutoffToHz, resToQ, eqGainDb, EQ_BANDS } from '../audio/dsp.js';
 
 // WAV file encoder
 function encodeWAV(samples, sampleRate, numChannels) {
@@ -145,33 +146,17 @@ function toneToHz(t, lo = 300, hi = 18000) {
   return lo * Math.pow(hi / lo, x);
 }
 
-// First-order highpass (resonance not modeled offline)
-function highpassInPlace(data, cutoffHz, sr) {
-  const rc = 1.0 / (2 * Math.PI * cutoffHz);
-  const dt = 1.0 / sr;
-  const alpha = rc / (rc + dt);
-  let prevY = 0, prevX = data[0] || 0;
-  for (let i = 0; i < data.length; i++) {
-    const x = data[i];
-    prevY = alpha * (prevY + x - prevX);
-    prevX = x;
-    data[i] = prevY;
-  }
-}
+// Apply a shape's EQ + filter — EXACT RBJ biquads (same math as the live
+// graph), so the bounce matches what you hear, resonance included
+function applyShapeEqAndFilter(data, fx, sr) {
+  if (Math.abs(fx.eqLow) > 0.01) processBiquad(data, biquadCoeffs('lowshelf', EQ_BANDS.low.freq, 0.707, eqGainDb(fx.eqLow), sr));
+  if (Math.abs(fx.eqMid) > 0.01) processBiquad(data, biquadCoeffs('peaking', EQ_BANDS.mid.freq, EQ_BANDS.mid.Q, eqGainDb(fx.eqMid), sr));
+  if (Math.abs(fx.eqHigh) > 0.01) processBiquad(data, biquadCoeffs('highshelf', EQ_BANDS.high.freq, 0.707, eqGainDb(fx.eqHigh), sr));
 
-// Apply a shape's filter to its bus — matches live BiquadFilter character
-// closely enough for a bounce (offline resonance is intentionally omitted)
-function applyShapeFilter(data, fx, sr) {
   const cutoffNorm = fx.cutoff !== undefined ? fx.cutoff : (fx.tone !== undefined ? fx.tone : 1);
-  const hz = toneToHz(cutoffNorm, 80, 18000);
   const type = fx.filterType || 'lowpass';
-  if (type === 'lowpass') {
-    if (cutoffNorm < 0.99) lowpassInPlace(data, hz, sr);
-  } else if (type === 'highpass') {
-    highpassInPlace(data, hz, sr);
-  } else if (type === 'bandpass') {
-    highpassInPlace(data, hz * 0.7, sr);
-    lowpassInPlace(data, hz * 1.4, sr);
+  if (type !== 'lowpass' || cutoffNorm < 0.99 || fx.res > 0.02) {
+    processBiquad(data, biquadCoeffs(type, cutoffToHz(cutoffNorm), resToQ(fx.res), 0, sr));
   }
 }
 
@@ -278,7 +263,7 @@ export function renderAudioMix(state, numCycles = 4) {
         for (let i = 0; i < totalSamples; i++) shapeBus[i] *= g;
       }
     }
-    applyShapeFilter(shapeBus, fx, sampleRate);
+    applyShapeEqAndFilter(shapeBus, fx, sampleRate);
     const p = Math.max(-1, Math.min(1, fx.pan));
     const gl = Math.cos((p + 1) * Math.PI / 4);
     const gr = Math.sin((p + 1) * Math.PI / 4);
@@ -330,11 +315,12 @@ export function renderAudioMix(state, numCycles = 4) {
     outR[i] += echoR[i] * echoWet * 0.92 + echoL[i] * echoWet * 0.38 + verb[i] * verbWet * 0.71;
   }
 
-  // Master tone + volume
-  if (master.tone < 0.99) {
-    const hz = toneToHz(master.tone, 300, 20000);
-    lowpassInPlace(outL, hz, sampleRate);
-    lowpassInPlace(outR, hz, sampleRate);
+  // Master EQ + tone + volume — exact biquads, both channels
+  for (const chan of [outL, outR]) {
+    if (Math.abs(master.eqLow) > 0.01) processBiquad(chan, biquadCoeffs('lowshelf', EQ_BANDS.low.freq, 0.707, eqGainDb(master.eqLow), sampleRate));
+    if (Math.abs(master.eqMid) > 0.01) processBiquad(chan, biquadCoeffs('peaking', EQ_BANDS.mid.freq, EQ_BANDS.mid.Q, eqGainDb(master.eqMid), sampleRate));
+    if (Math.abs(master.eqHigh) > 0.01) processBiquad(chan, biquadCoeffs('highshelf', EQ_BANDS.high.freq, 0.707, eqGainDb(master.eqHigh), sampleRate));
+    if (master.tone < 0.99) processBiquad(chan, biquadCoeffs('lowpass', toneToHz(master.tone, 300, 20000), 0.707, 0, sampleRate));
   }
   const mv = Math.max(0, Math.min(1, master.volume));
 
