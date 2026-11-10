@@ -2,6 +2,8 @@
 // synth buffers as fallback for keys/organ/marimba/vibes/pluck.
 // 6 octaves of samples (C1–C6) for minimal pitch-shifting artifacts.
 
+import { pickVictimIndex } from './voicePolicy.js';
+
 const ATTACK_SEC = 0.004;
 // 48 voices: large enough that at capped tempo voices expire naturally
 // instead of being evicted mid-life — eviction is a native stop/disconnect
@@ -479,19 +481,25 @@ async function decodeSamples(ctx) {
 }
 
 // ── Voice management (crash-safe) ────────────────────────────
-// No setTimeout for voice cleanup — react-native-audio-api 0.6.5 crashes
-// when disconnect() is called on a node that was already freed by the native
-// audio thread (SIGSEGV in AudioNodeManager::addPendingNodeConnection).
-// All disconnect calls are immediate and guarded by a killed flag.
+// No setTimeout for voice cleanup — all kills happen synchronously from the
+// scheduler tick.
+//
+// Disconnects are TARGETED (src.disconnect(gain), gain.disconnect(dest)).
+// The no-argument disconnect() on 0.6.5 iterates the node's outputNodes_
+// set on the JS thread (AudioNode::disconnect()) while the audio thread may
+// be inserting into that same set (settlePendingConnections → connectNode)
+// for a voice created in the current render period — an unsynchronized
+// std::unordered_set read/write that crashes inside
+// AudioNodeManager::addPendingNodeConnection. A targeted disconnect only
+// enqueues a pending op under the graph lock — no iteration, no race.
 let audioCtxRef = null;
 
-function trackVoice(entry) {
+function trackVoice(entry, now) {
   activeVoices.push(entry);
   while (activeVoices.length > MAX_VOICES) {
-    // Priority eviction: kill the oldest effect TAP before any main note —
-    // when many sends combine, echoes thin out instead of melodies dropping
-    let idx = activeVoices.findIndex(v => v.tap);
-    if (idx === -1 || idx === activeVoices.length - 1) idx = 0;
+    // Evict the voice whose removal is least audible (silent → unstarted
+    // tap → sounding tap → oldest sounding note → future note)
+    const idx = pickVictimIndex(activeVoices, now);
     const [victim] = activeVoices.splice(idx, 1);
     killVoice(victim);
   }
@@ -501,31 +509,40 @@ function killVoice(entry) {
   if (!entry || entry.killed) return;
   entry.killed = true;
   try { if (entry.src) entry.src.stop(); } catch (e) {}
-  try { if (entry.src) entry.src.disconnect(); } catch (e) {}
-  try { if (entry.gain) entry.gain.disconnect(); } catch (e) {}
+  try { if (entry.src && entry.gain) entry.src.disconnect(entry.gain); } catch (e) {}
+  try { if (entry.gain && entry.dest) entry.gain.disconnect(entry.dest); } catch (e) {}
   entry.src = null;
   entry.gain = null;
+  entry.dest = null;
 }
 
 function pruneVoices(now) {
-  let i = 0;
-  while (i < activeVoices.length) {
-    if (now > activeVoices[i].endTime) {
-      killVoice(activeVoices[i]);
-      activeVoices.splice(i, 1);
-    } else {
-      i++;
-    }
+  // In-place compaction — no per-voice splice (O(n²)) on the JS thread
+  let w = 0;
+  for (let r = 0; r < activeVoices.length; r++) {
+    const v = activeVoices[r];
+    if (now > v.endTime) killVoice(v);
+    else activeVoices[w++] = v;
   }
+  activeVoices.length = w;
 }
 
 function fadeOutAllVoices(ctx) {
   // Mark all voices as expired so pruneVoices kills them on next tick.
-  // This avoids both the pop from immediate disconnect AND the native crash from setTimeout.
   const now = ctx ? ctx.currentTime : 0;
   for (const v of activeVoices) {
     v.endTime = now; // Will be cleaned up by pruneVoices on next triggerTimbre call
   }
+}
+
+// Hard-kill every voice, including ones scheduled in the future (lookahead
+// notes and echo taps up to ~3.6s ahead). Only call when the output is
+// already silent (master faded to 0 / context about to suspend) — otherwise
+// it's a click. Used on pause so stale queued notes don't fire on the next
+// play (which restarts from the top of the cycle).
+function killAllVoices() {
+  for (const v of activeVoices) killVoice(v);
+  activeVoices.length = 0;
 }
 
 // ── Sample lookup ────────────────────────────────────────────
@@ -592,7 +609,8 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, sta
         gain.connect(masterGain);
         src.start(t);
         const endTime = t + Math.min(durSec + 0.1, buffer.duration) + 0.05;
-        trackVoice({ src, gain, endTime, killed: false, tap: isTap });
+        const silentAt = durSec < buffer.duration * 0.8 ? t + durSec + 0.04 : t + buffer.duration;
+        trackVoice({ src, gain, dest: masterGain, start: t, silentAt, endTime, killed: false, tap: isTap }, now);
       } catch (e) {}
     }
     return;
@@ -622,7 +640,8 @@ function triggerTimbre(ctx, masterGain, synth, stepData, velocity, duration, sta
       gain.connect(masterGain);
       src.start(t);
       const endTime = t + Math.min(duration + 0.15, sampleDur) + 0.05;
-      trackVoice({ src, gain, endTime, killed: false, tap: isTap });
+      const silentAt = duration < sampleDur * 0.8 ? t + duration + 0.06 : t + sampleDur;
+      trackVoice({ src, gain, dest: masterGain, start: t, silentAt, endTime, killed: false, tap: isTap }, now);
     } catch (e) {}
   }
 }
@@ -632,4 +651,4 @@ function getDrumBank() { return drumBank; }
 function getActiveVoiceCount() { return activeVoices.length; }
 function getMaxVoices() { return MAX_VOICES; }
 
-export { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices, preloadAssets, getSampleBank, getDrumBank, getActiveVoiceCount, getMaxVoices };
+export { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices, killAllVoices, preloadAssets, getSampleBank, getDrumBank, getActiveVoiceCount, getMaxVoices };

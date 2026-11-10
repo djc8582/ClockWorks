@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Clockworks — Support</title>
+<style>
+  :root {
+    --bg: #F5F5F7;
+    --card: #ffffff;
+    --ink: #1d1d1f;
+    --muted: #6e6e73;
+    --accent: #c0392b;
+    --line: #e3e3e8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 48px 24px 80px; }
+  header { text-align: center; margin-bottom: 48px; }
+  .logo {
+    width: 84px; height: 84px; border-radius: 20px; margin: 0 auto 18px;
+    display: grid; place-items: center;
+    background: #1d1d1f;
+    box-shadow: 0 8px 28px rgba(0,0,0,.12);
+  }
+  .logo svg { display: block; }
+  h1 { font-size: 34px; letter-spacing: -0.02em; margin: 0 0 6px; }
+  .tagline { color: var(--muted); font-size: 18px; margin: 0; }
+  h2 { font-size: 22px; letter-spacing: -0.01em; margin: 40px 0 14px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 8px 22px; margin-top: 10px;
+  }
+  details { border-bottom: 1px solid var(--line); padding: 16px 0; }
+  details:last-child { border-bottom: none; }
+  summary { font-weight: 600; cursor: pointer; list-style: none; outline: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; float: right; color: var(--muted); font-weight: 400; font-size: 22px; line-height: 1; }
+  details[open] summary::after { content: "–"; }
+  details p { color: var(--muted); margin: 12px 0 2px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .contact {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 26px; text-align: center; margin-top: 14px;
+  }
+  .contact .email { font-size: 20px; font-weight: 600; }
+  footer { text-align: center; color: var(--muted); font-size: 14px; margin-top: 56px; }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="logo">
+        <svg width="46" height="46" viewBox="0 0 46 46" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="23" cy="23" r="20" stroke="#F5F5F7" stroke-width="2.5"/>
+          <polygon points="23,9 34,30 12,30" stroke="#c0392b" stroke-width="2.5" fill="none"/>
+          <line x1="23" y1="23" x2="23" y2="11" stroke="#F5F5F7" stroke-width="2.5" stroke-linecap="round"/>
+          <circle cx="23" cy="23" r="2.5" fill="#F5F5F7"/>
+        </svg>
+      </div>
+      <h1>Clockworks</h1>
+      <p class="tagline">Polyrhythmic music maker</p>
+    </header>
+
+    <h2>Frequently asked questions</h2>
+    <div class="card">
+      <details open>
+        <summary>What is Clockworks?</summary>
+        <p>Clockworks is a polyrhythmic composition tool. You layer rotating shapes on a
+        clockface — each shape's sides become evenly-spaced beats — so combining different
+        shapes creates intricate cross-rhythms with no math required.</p>
+      </details>
+      <details>
+        <summary>How do I add a shape?</summary>
+        <p>Tap anywhere on the canvas to add a shape, then use the bottom panel to change its
+        number of sides, instrument, and scale. Press play to hear all shapes loop together.</p>
+      </details>
+      <details>
+        <summary>Can I export my music?</summary>
+        <p>Yes. Clockworks exports to MIDI, audio (WAV), and sheet music PDF using the share
+        sheet, so you can continue your work in any DAW or notation app.</p>
+      </details>
+      <details>
+        <summary>Does Clockworks require an account or internet connection?</summary>
+        <p>No. Clockworks works fully offline and requires no account or sign-up. Everything
+        runs on your device.</p>
+      </details>
+      <details>
+        <summary>Where are my projects stored?</summary>
+        <p>Projects are saved locally on your device. Nothing is uploaded to any server.</p>
+      </details>
+      <details>
+        <summary>I found a bug or have a feature request.</summary>
+        <p>We'd love to hear from you — email us using the address below and we'll get back
+        to you as soon as we can.</p>
+      </details>
+    </div>
+
+    <h2>Contact</h2>
+    <div class="contact">
+      <p style="margin:0 0 6px; color:var(--muted)">Questions, bugs, or feedback?</p>
+      <div class="email"><a href="mailto:cantor.dylan@gmail.com">cantor.dylan@gmail.com</a></div>
+    </div>
+
+    <footer>
+      <p>© 2026 Dylan Cantor · <a href="privacy.html">Privacy Policy</a></p>
+    </footer>
+  </div>
+</body>
+</html>

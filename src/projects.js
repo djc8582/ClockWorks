@@ -1,6 +1,7 @@
 // Project save/load system — stores projects as JSON files in the app's document directory.
 import * as FileSystem from 'expo-file-system';
 import { getState, sanitizeScenes } from './state.js';
+import { normalizeLoops } from './looper.js';
 import { MAX_SCENES, AUDIO, makeDefaultMasterFx } from './constants.js';
 
 const PROJECTS_DIR = FileSystem.documentDirectory + 'projects/';
@@ -22,6 +23,8 @@ export async function saveProject(name) {
     activeSceneIndex: state.activeSceneIndex,
     scenes: state.scenes,
     enabledSlots: state.enabledSlots,
+    layerOrder: state.layerOrder,
+    layerLoops: state.layerLoops,
     effects: state.effects,
   };
   const filename = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.json';
@@ -67,11 +70,17 @@ export async function loadProject(filename) {
   state.activeSceneIndex = Math.max(0, Math.min(data.activeSceneIndex || 0, scenes.length - 1));
   state.scenes = scenes;
   state.enabledSlots = enabledSlots;
+  // Per-layer loop rules; projects saved before the per-layer looper have
+  // none and are migrated (see looper.js normalizeLoops)
+  state.layerOrder = Array.isArray(data.layerOrder) ? data.layerOrder : undefined;
+  state.layerLoops = data.layerLoops && typeof data.layerLoops === 'object' ? data.layerLoops : undefined;
+  normalizeLoops(state);
   state.effects = { ...makeDefaultMasterFx(), ...(data.effects || {}) };
 
   // Point the editing panel at the loaded active scene — stale shape ids
   // from the previous project would leave every canvas shape dimmed
   if (state.ui) {
+    state.activeSceneIndex = Math.min(state.activeSceneIndex, state.enabledSlots.lastIndexOf(true));
     state.ui.panelSceneIndex = state.activeSceneIndex;
     const shapes = scenes[state.activeSceneIndex]?.shapes || [];
     state.ui.panelShapeId = shapes.length > 0 ? shapes[0].id : null;

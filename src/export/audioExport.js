@@ -3,6 +3,7 @@
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { getState } from '../state.js';
+import { songScenes } from '../looper.js';
 import { TIMING, makeDefaultFx, makeDefaultMasterFx } from '../constants.js';
 import { biquadCoeffs, processBiquad, cutoffToHz, resToQ, eqGainDb, EQ_BANDS } from '../audio/dsp.js';
 import { AUDIO } from '../constants.js';
@@ -207,8 +208,9 @@ export function renderAudioMix(state, numCycles = 4) {
   const sampleRate = 44100;
   const bpm = state.bpm || 120;
   const cycleDuration = (60 / bpm) * TIMING.defaultCycleBeats;
-  // Only render scenes with shapes — empty slots would just add silence
-  const scenes = state.scenes.filter(sc => sc.shapes && sc.shapes.length > 0);
+  // The song's bars in play order (bars past the song end only hold loop
+  // repeats for the bar-strip preview and are not part of the song)
+  const scenes = songScenes(state);
   if (scenes.length === 0) return null;
   const master = { ...makeDefaultMasterFx(), ...(state.effects || {}) };
   const effDelay = master.delaySync

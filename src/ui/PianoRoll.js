@@ -3,7 +3,8 @@ import { View, Text, Pressable, StyleSheet, useWindowDimensions } from 'react-na
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle, useAnimatedReaction, runOnJS, withDecay } from 'react-native-reanimated';
 import { COLORS, NOTE_NAMES, PITCH, DRUM_TIMBRES, DRUM_SLOTS } from '../constants.js';
-import { updateState, safePanelScene } from '../state.js';
+import { updateState, panelBarIndex } from '../state.js';
+import { editLayerBar } from '../looper.js';
 import { useStore } from '../hooks/useStore.js';
 import PianoRollCell from './PianoRollCell.js';
 
@@ -343,24 +344,24 @@ function DrumGrid({ shape, color }) {
     }
   }, [shape.id]);
 
+  // Pattern edits go through the looper: they land on the edited bar only
   function toggleSlot(vi, si, slotIdx) {
     updateState(s => {
-      const scene = safePanelScene(s);
-      if (!scene) return;
-      const sh = scene.shapes.find(ss => ss.id === shape.id);
-      if (!sh || !sh.vertices[vi]) return;
-      const sd = si === 0 ? sh.vertices[vi] : (sh.vertices[vi].subs && sh.vertices[vi].subs[si - 1]);
-      if (!sd) return;
-      if (!sd.pitches) sd.pitches = [];
-      const idx = sd.pitches.indexOf(slotIdx);
-      if (idx !== -1) {
-        sd.pitches.splice(idx, 1);
-        if (sd.pitches.length === 0) sd.muted = true;
-      } else {
-        sd.pitches.push(slotIdx);
-        sd.pitches.sort((a, b) => a - b);
-        sd.muted = false;
-      }
+      editLayerBar(s, panelBarIndex(s), shape.id, (sh) => {
+        if (!sh.vertices[vi]) return;
+        const sd = si === 0 ? sh.vertices[vi] : (sh.vertices[vi].subs && sh.vertices[vi].subs[si - 1]);
+        if (!sd) return;
+        if (!sd.pitches) sd.pitches = [];
+        const idx = sd.pitches.indexOf(slotIdx);
+        if (idx !== -1) {
+          sd.pitches.splice(idx, 1);
+          if (sd.pitches.length === 0) sd.muted = true;
+        } else {
+          sd.pitches.push(slotIdx);
+          sd.pitches.sort((a, b) => a - b);
+          sd.muted = false;
+        }
+      });
     });
   }
 
@@ -544,12 +545,11 @@ function MelodicGrid({ shape, color }) {
 
   function toggleMute(vi, si) {
     updateState(s => {
-      const scene = safePanelScene(s);
-      if (!scene) return;
-      const sh = scene.shapes.find(ss => ss.id === shape.id);
-      if (!sh || !sh.vertices[vi]) return;
-      const sd = si === 0 ? sh.vertices[vi] : (sh.vertices[vi].subs && sh.vertices[vi].subs[si - 1]);
-      if (sd) sd.muted = !sd.muted;
+      editLayerBar(s, panelBarIndex(s), shape.id, (sh) => {
+        if (!sh.vertices[vi]) return;
+        const sd = si === 0 ? sh.vertices[vi] : (sh.vertices[vi].subs && sh.vertices[vi].subs[si - 1]);
+        if (sd) sd.muted = !sd.muted;
+      });
     });
   }
 

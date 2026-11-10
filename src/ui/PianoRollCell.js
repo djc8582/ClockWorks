@@ -1,7 +1,8 @@
 import React from 'react';
 import { View, Pressable, StyleSheet } from 'react-native';
 import { COLORS } from '../constants.js';
-import { getState, updateState, safePanelScene } from '../state.js';
+import { getState, updateState, panelBarIndex } from '../state.js';
+import { editLayerBar } from '../looper.js';
 import { playPreview } from '../audio/audioEngine.js';
 
 function getStepData(vertex, stepIndex) {
@@ -37,34 +38,33 @@ export default React.memo(function PianoRollCell({
     const hasPitch = pitches.some(p => Math.abs(p - pitch) < 0.01);
 
     if (hasPitch && !stepData.muted) {
+      // Lands on the edited bar only — a repeat bar becomes an override
       updateState(s => {
-        const scene = safePanelScene(s);
-        if (!scene) return;
-        const sh = scene.shapes.find(ss => ss.id === shapeId);
-        if (!sh || !sh.vertices[vertexIndex]) return;
-        const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : (sh.vertices[vertexIndex].subs && sh.vertices[vertexIndex].subs[stepIndex - 1]);
-        if (!sd || !sd.pitches) return;
-        if (sd.pitches.length > 1) {
-          sd.pitches = sd.pitches.filter(p => Math.abs(p - pitch) > 0.01);
-        } else {
-          sd.pitches = [];
-          sd.muted = true;
-        }
+        editLayerBar(s, panelBarIndex(s), shapeId, (sh) => {
+          if (!sh.vertices[vertexIndex]) return;
+          const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : (sh.vertices[vertexIndex].subs && sh.vertices[vertexIndex].subs[stepIndex - 1]);
+          if (!sd || !sd.pitches) return;
+          if (sd.pitches.length > 1) {
+            sd.pitches = sd.pitches.filter(p => Math.abs(p - pitch) > 0.01);
+          } else {
+            sd.pitches = [];
+            sd.muted = true;
+          }
+        });
       });
     } else {
       updateState(s => {
-        const scene = safePanelScene(s);
-        if (!scene) return;
-        const sh = scene.shapes.find(ss => ss.id === shapeId);
-        if (!sh || !sh.vertices[vertexIndex]) return;
-        const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : (sh.vertices[vertexIndex].subs && sh.vertices[vertexIndex].subs[stepIndex - 1]);
-        if (!sd) return;
-        if (!sd.pitches) sd.pitches = [];
-        if (!hasPitch) {
-          sd.pitches.push(pitch);
-          sd.pitches.sort((a, b) => a - b);
-        }
-        if (sd.muted) sd.muted = false;
+        editLayerBar(s, panelBarIndex(s), shapeId, (sh) => {
+          if (!sh.vertices[vertexIndex]) return;
+          const sd = stepIndex === 0 ? sh.vertices[vertexIndex] : (sh.vertices[vertexIndex].subs && sh.vertices[vertexIndex].subs[stepIndex - 1]);
+          if (!sd) return;
+          if (!sd.pitches) sd.pitches = [];
+          if (!hasPitch) {
+            sd.pitches.push(pitch);
+            sd.pitches.sort((a, b) => a - b);
+          }
+          if (sd.muted) sd.muted = false;
+        });
       });
 
       const currentState = getState();

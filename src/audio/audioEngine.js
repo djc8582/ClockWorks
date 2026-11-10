@@ -1,9 +1,12 @@
-import { AudioContext } from 'react-native-audio-api';
+import { AudioContext, AudioManager } from 'react-native-audio-api';
 import { AppState } from 'react-native';
 import { getState, getShapes, updateState } from '../state.js';
 import { TIMING, AUDIO, makeDefaultFx, makeDefaultMasterFx } from '../constants.js';
-import { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices, getActiveVoiceCount, getMaxVoices } from './timbres.js';
+import { createTimbre, triggerTimbre, initSampleBank, fadeOutAllVoices, killAllVoices, getActiveVoiceCount, getMaxVoices } from './timbres.js';
 import { createScheduler } from './scheduler.js';
+import { collectWindowEvents, planTick } from './eventWindow.js';
+import { createTransportControl } from './transportControl.js';
+import { createClockSmoother } from './clockSmoother.js';
 import { EQ_BANDS, eqGainDb, cutoffToHz, resToQ as dspResToQ } from './dsp.js';
 
 let audioContext = null;
@@ -16,8 +19,27 @@ let onNoteTriggered = null;
 let sceneProvider = null; // cycle number → scene index (set by sequencer)
 let masterGainValue = 0.7;  // Track gain in JS to avoid .value getter issues
 let appStateSubscription = null;
-let rescheduleThrottleId = null;
-const MAX_NOTES_PER_TICK = 12;
+// Per-tick note budget: beyond SOFT, events that aren't due before the next
+// tick are deferred to it (never dropped); HARD is a last-resort valve.
+const NOTES_PER_TICK_SOFT = 12;
+const NOTES_PER_TICK_HARD = 64;
+const DEFER_HORIZON_SEC = 0.08; // > one 50ms tick + timer jitter
+const PAUSE_FADE_SEC = 0.015;   // master fade before suspend (suspend = hard cut)
+const START_FADE_SEC = 0.02;    // master fade-in on play/foreground
+const ROUTE_CHECK_MS = 600;     // after a route change, verify the clock is moving
+
+// JS-tracked master automation state. masterGainValue = TARGET level;
+// masterQueueEnd = end time of the last event we queued on masterGain.gain
+// (0.6.5 silently ignores any event that starts before the queue end, so
+// every new ramp must start at/after it). masterFaded = output parked at 0
+// for pause/background — level changes then only update the target.
+let masterQueueEnd = 0;
+let masterQueueValue = 0.7;
+let masterFaded = false;
+
+let transport = null;
+let interruptionSubs = [];
+const clockSmoother = createClockSmoother();
 
 // ── Effects graph ────────────────────────────────────────────
 // Per-shape channel strips + two shared send buses + master chain.
@@ -145,8 +167,16 @@ function initAudio() {
 
 async function doInitAudio() {
   try {
-    audioContext = new AudioContext();
-    safeAudioOp(() => audioContext.resume());
+    // initSuspended: don't start AVAudioEngine / activate the audio session
+    // at launch (that stopped the user's own music the moment Clockworks
+    // opened, before they pressed play). The engine starts on first play.
+    // This also removes the init-time resume()/suspend() pair, which on
+    // 0.6.5 run on two racing native threads.
+    audioContext = new AudioContext({ initSuspended: true });
+    transport = createTransportControl(() => audioContext, {
+      fadeOut: () => fadeMasterOut(),
+      beforeSuspend: (why) => { if (why === 'pause') killAllVoices(); },
+    });
 
     // Master chain: masterGain (auto-headroom × user volume) → masterTone → out
     masterGain = audioContext.createGain();
@@ -203,32 +233,32 @@ async function doInitAudio() {
     await initSampleBank(audioContext);
 
     updateCycleDuration();
-    scheduler = createScheduler(audioContext, cycleDuration, onSchedulerTick);
+    scheduler = createScheduler(audioContext, cycleDuration, onSchedulerTick, {
+      onStall: () => { if (transport) transport.kick(); },
+    });
     audioInitialized = true;
     applyMasterFx(); // apply persisted master effects (loaded projects)
 
-    // Suspend immediately — we'll resume when the user taps play.
-    // This prevents the context from auto-playing before the user interacts.
-    safeAudioOp(() => audioContext.suspend());
-
-    // Background/foreground handling
+    // Background/foreground handling. Background keeps the transport
+    // position and the queued notes (they're still in the future — the
+    // clock is frozen while suspended), so foreground resumes seamlessly.
     if (!appStateSubscription) {
       appStateSubscription = AppState.addEventListener('change', (nextState) => {
         if (!audioInitialized) return;
         if (nextState === 'background' || nextState === 'inactive') {
           if (scheduler) scheduler.stop();
-          safeAudioOp(() => { if (audioContext) return audioContext.suspend(); });
+          if (transport) transport.request('suspended', 'background');
         } else if (nextState === 'active') {
           // Only reactivate the audio session if the user was actually playing
           if (getState().ui.playing) {
-            safeAudioOp(() => {
-              if (audioContext && audioContext.state !== 'running') return audioContext.resume();
-            });
+            if (transport) transport.request('running');
+            fadeMasterIn();
             if (scheduler) scheduler.resume();
           }
         }
       });
     }
+    observeSystemAudioEvents();
   } catch (e) {
     if (__DEV__) console.warn('[audio] Init failed:', e?.message || e);
     if (audioContext) {
@@ -247,14 +277,107 @@ function startPlayback() {
     // background and start playback when it lands, if still requested.
     initAudio().then(() => {
       if (audioInitialized && audioContext && scheduler && getState().ui.playing) {
-        safeAudioOp(() => audioContext.resume());
-        scheduler.start();
+        beginPlayback();
       }
     }).catch(() => {});
     return;
   }
-  safeAudioOp(() => audioContext.resume());
+  beginPlayback();
+}
+
+function beginPlayback() {
+  transport.request('running');
+  // Play restarts from the top of the cycle: anything still queued from the
+  // previous run (lookahead notes, echo taps) must not fire. The master is
+  // parked at 0 here (paused) or nothing is queued yet (first play), so the
+  // kill is silent.
+  if (masterFaded) killAllVoices();
+  fadeMasterIn();
+  clockSmoother.reset();
   scheduler.start();
+}
+
+// ── Master fade helpers (click-free pause/resume) ───────────
+// suspend() on 0.6.5 zeroes the output mid-buffer (IOSAudioPlayer sets
+// isRunning_=false → the render block writes silence) — an audible click
+// whenever a note is sounding. Ramp the master down first.
+function queueMasterRamp(to, dur) {
+  if (!audioContext || !masterGain) return 0;
+  const now = audioContext.currentTime;
+  if (!isFinite(now)) return 0;
+  // End at now+dur, or just past the last queued event if that's later —
+  // NOT start+dur, or a fast slider drag would push the queue ever further
+  // into the future (growing lag).
+  const end = Math.max(now + dur, masterQueueEnd + 0.003);
+  try {
+    // Anchor only when the queue is empty (0.6.5 ignores events that start
+    // before the queue end; a ramp then continues from the queued value).
+    // Never read gain.value (unreliable on 0.6.5).
+    if (now > masterQueueEnd) masterGain.gain.setValueAtTime(masterQueueValue, now);
+    masterGain.gain.linearRampToValueAtTime(to, end);
+    masterQueueEnd = end;
+    masterQueueValue = to;
+  } catch (e) {}
+  return end - now;
+}
+
+// New master LEVEL target (volume / headroom). While parked at 0 for
+// pause/background only the target changes; fadeMasterIn applies it.
+function setMasterTarget(target, dur) {
+  masterGainValue = target;
+  if (masterFaded) return;
+  queueMasterRamp(target, dur);
+}
+
+// Returns how long (ms) to wait before the native suspend
+function fadeMasterOut() {
+  if (masterFaded) return 0;
+  masterFaded = true;
+  const secs = queueMasterRamp(0, PAUSE_FADE_SEC);
+  return secs * 1000 + 10;
+}
+
+function fadeMasterIn() {
+  if (!masterFaded) return;
+  masterFaded = false;
+  queueMasterRamp(masterGainValue, START_FADE_SEC);
+}
+
+// ── Interruptions / route changes (calls, Siri, AirPods) ────
+// 0.6.5 stops AVAudioEngine on interruption and on engine configuration
+// changes but never restarts it, and the JS context keeps reporting
+// 'running' (so the old watchdog's resume() was a no-op): audio went dead
+// with the UI still showing "playing" until the user toggled play twice.
+function observeSystemAudioEvents() {
+  if (interruptionSubs.length > 0) return;
+  try {
+    AudioManager.observeAudioInterruptions(true);
+    interruptionSubs.push(AudioManager.addSystemEventListener('interruption', (e) => {
+      if (!e || e.type !== 'began') return;
+      // Behave like a pause: the UI shows paused, play restarts cleanly
+      // (and resume() then genuinely restarts the engine).
+      if (getState().ui.playing) {
+        pauseAudio();
+        // Same as a user pause: stopped ⇒ canvas shows the edited bar
+        updateState(s => { s.ui.playing = false; s.activeSceneIndex = s.ui.panelSceneIndex; });
+      }
+    }));
+    interruptionSubs.push(AudioManager.addSystemEventListener('routeChange', () => {
+      // AirPods in/out, BT car kit, etc. If the engine stopped on the
+      // configuration change, restart it.
+      if (!getState().ui.playing || !audioContext) return;
+      const before = audioContext.currentTime;
+      setTimeout(() => {
+        try {
+          if (getState().ui.playing && audioContext && audioContext.currentTime === before && transport) {
+            transport.kick();
+          }
+        } catch (err) {}
+      }, ROUTE_CHECK_MS);
+    }));
+  } catch (e) {
+    if (__DEV__) console.warn('[audio] system event observers unavailable:', e?.message || e);
+  }
 }
 
 function updateCycleDuration() {
@@ -461,79 +584,43 @@ function scheduleVoice(shape, synth, stepData, vel, dur, when, vertexIndex) {
 // loops are sample-accurate: the next scene's downbeat is scheduled inside
 // the lookahead window, on the exact cycle boundary, with the transport
 // running continuously (no resets, no voice kills, no UI-thread latency).
-function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur) {
+function onSchedulerTick(scheduleFrom, scheduleTo, transportStart, cycleDur, now) {
   try {
     const state = getState();
     if (!state || !state.scenes || state.scenes.length === 0) return;
     if (!cycleDur || cycleDur <= 0) return;
-    if (!isFinite(scheduleFrom) || !isFinite(scheduleTo)) return;
 
-    const relFrom = scheduleFrom - transportStart;
-    const relTo = scheduleTo - transportStart;
-    if (!isFinite(relFrom) || !isFinite(relTo)) return;
-    const firstCycle = Math.max(0, Math.floor(relFrom / cycleDur));
-    const lastCycle = Math.min(firstCycle + 2, Math.floor(relTo / cycleDur)); // Cap to 2 cycles per tick
+    const events = collectWindowEvents({
+      scenes: state.scenes,
+      sceneForCycle: sceneProvider || (() => state.activeSceneIndex),
+      transportStart, cycleDur,
+      from: scheduleFrom, to: scheduleTo,
+      minEventSpacing: AUDIO.minEventSpacing,
+    });
+    if (events.length === 0) return;
 
-    let totalNotes = 0;
+    const plan = planTick(events, isFinite(now) ? now : scheduleFrom, {
+      softCap: NOTES_PER_TICK_SOFT,
+      hardCap: NOTES_PER_TICK_HARD,
+      horizon: DEFER_HORIZON_SEC,
+    });
 
-    for (let cycle = firstCycle; cycle <= lastCycle; cycle++) {
-      const sceneIdx = sceneProvider ? sceneProvider(cycle) : state.activeSceneIndex;
-      const scene = state.scenes[sceneIdx];
-      const shapes = scene && scene.shapes;
-      if (!shapes || shapes.length === 0) continue;
-
-      const cycleStart = transportStart + cycle * cycleDur;
-
-      for (const shape of shapes) {
-        if (totalNotes >= MAX_NOTES_PER_TICK) break;
-        if (!shape || !shape.vertices) continue;
-        const synth = ensureSynth(shape);
-        if (!synth) continue;
-
-        const sides = shape.sides;
-        if (!sides || sides <= 0) continue;
-        const interval = cycleDur / sides;
-        // Event thinning at extreme tempo: never schedule a shape's events
-        // closer than minEventSpacing — drop subdivisions first, then
-        // stride across vertices. Prevents the native voice-teardown storm
-        // that crashes react-native-audio-api at very high BPM.
-        let sub = Math.min(shape.subdivision || 1, 4);
-        if (interval / sub < AUDIO.minEventSpacing) {
-          sub = Math.max(1, Math.floor(interval / AUDIO.minEventSpacing));
-        }
-        const vertexStride = interval < AUDIO.minEventSpacing
-          ? Math.ceil(AUDIO.minEventSpacing / interval)
-          : 1;
-        const subInterval = interval / sub;
-
-        for (let i = 0; i < sides; i++) {
-          if (i % vertexStride !== 0) continue;
-          for (let s = 0; s < sub; s++) {
-            const eventTime = cycleStart + i * interval + s * subInterval;
-            if (eventTime < scheduleFrom || eventTime >= scheduleTo) continue;
-
-            const v = shape.vertices[i];
-            if (!v) continue;
-            const stepData = s === 0 ? v : (v.subs && v.subs[s - 1]);
-            if (!stepData || stepData.muted) continue;
-
-            if (totalNotes >= MAX_NOTES_PER_TICK) break;
-            totalNotes++;
-
-            // Per-shape volume lives on the channel strip now — velocity only here
-            const vel = velocityToGain(stepData.velocity || 85);
-            const dur = getNoteDuration(shape);
-
-            scheduleVoice(shape, synth, stepData, vel, dur, eventTime, i);
-
-            if (s === 0 && onNoteTriggered) {
-              // eventTime = exact scheduled audio-clock time of this note
-              try { onNoteTriggered(shape, i, eventTime); } catch (e) {}
-            }
-          }
-        }
+    for (const ev of plan.schedule) {
+      const shape = ev.shape;
+      const synth = ensureSynth(shape);
+      if (!synth) continue;
+      // Per-shape volume lives on the channel strip — velocity only here
+      const vel = velocityToGain(ev.stepData.velocity || 85);
+      const dur = getNoteDuration(shape);
+      scheduleVoice(shape, synth, ev.stepData, vel, dur, ev.time, ev.vertexIndex);
+      if (ev.subIndex === 0 && onNoteTriggered) {
+        // ev.time = exact scheduled audio-clock time of this note
+        try { onNoteTriggered(shape, ev.vertexIndex, ev.time); } catch (e) {}
       }
     }
+    if (__DEV__ && plan.dropped > 0) console.warn('[audio] note burst over hard cap — dropped', plan.dropped);
+    // Partial window → the scheduler resumes exactly at the first deferred event
+    return plan.resumeAt != null ? plan.resumeAt : undefined;
   } catch (e) {}
 }
 
@@ -670,14 +757,11 @@ function rescheduleAll() {
     try {
       const target = getTargetGain();
       if (!isFinite(target) || target < 0) return;
-      const now = audioContext.currentTime;
-      if (!isFinite(now)) return;
       // Note: cancelScheduledValues crashes on react-native-audio-api 0.6.5
-      // (native null deref in ParamChangeEvent deque). Use setValueAtTime to
-      // override any in-progress ramp instead.
-      masterGain.gain.setValueAtTime(masterGainValue, now);
-      masterGain.gain.linearRampToValueAtTime(target, now + 0.05);
-      masterGainValue = target;
+      // (native null deref in ParamChangeEvent deque). Ramps are queued
+      // after the last queued master event instead (see queueMasterRamp).
+      if (Math.abs(target - masterGainValue) < 1e-4) return; // idempotent
+      setMasterTarget(target, 0.05);
     } catch (e) {}
   }
   } catch (e) {
@@ -697,26 +781,26 @@ function transitionScene() {
   if (audioContext && masterGain) {
     try {
       const target = getTargetGain();
-      const now = audioContext.currentTime;
-      if (!isFinite(target) || !isFinite(now) || target < 0) return;
-      masterGain.gain.setValueAtTime(masterGainValue, now);
-      masterGain.gain.linearRampToValueAtTime(masterGainValue * 0.6, now + 0.02);
-      masterGain.gain.linearRampToValueAtTime(target, now + 0.10);
-      masterGainValue = target;
+      if (!isFinite(target) || target < 0) return;
+      if (!masterFaded) queueMasterRamp(masterGainValue * 0.6, 0.02);
+      setMasterTarget(target, 0.08);
     } catch (e) {}
   }
 }
 
 // ── Pause / Resume ──────────────────────────────────────────
+// Pause: stop scheduling, fade the master out, then (after the fade) kill
+// every queued voice and suspend — all serialized through `transport`.
 function pauseAudio() {
   if (!audioInitialized || !scheduler) return;
   scheduler.stop();
-  safeAudioOp(() => { if (audioContext && audioContext.suspend) return audioContext.suspend(); });
+  if (transport) transport.request('suspended', 'pause');
 }
 
 function resumeAudio() {
   if (!audioInitialized || !scheduler) return;
-  safeAudioOp(() => { if (audioContext && audioContext.resume) return audioContext.resume(); });
+  if (transport) transport.request('running');
+  fadeMasterIn();
   scheduler.resume();
 }
 
@@ -730,6 +814,16 @@ function getTransportSeconds() {
   return scheduler.getLoopPosition(audioContext.currentTime);
 }
 
+// Clock-hand transport: ONE currentTime read per frame, smoothed between
+// render callbacks (see clockSmoother.js) so the hand moves continuously
+// and lands on each dot exactly when its note is scheduled.
+// Returns { loop, elapsed } in seconds, or null when not playing.
+function getVisualTransport(hostNowMs) {
+  if (!audioInitialized || !scheduler || !scheduler.isRunning()) return null;
+  const t = clockSmoother.sample(audioContext.currentTime, hostNowMs);
+  return { loop: scheduler.getLoopPosition(t), elapsed: scheduler.getElapsed(t) };
+}
+
 // Raw elapsed time (not wrapped) — used by sequencer to count cycles
 function getElapsedSeconds() {
   if (!audioInitialized || !scheduler) return 0;
@@ -740,6 +834,6 @@ function getElapsedSeconds() {
 export {
   initAudio, startPlayback, pauseAudio, resumeAudio, updateBPM, updateCycleDuration, rescheduleAll, transitionScene,
   triggerNote, playPreview, swapTimbre, isAudioInitialized, getTransportSeconds, getElapsedSeconds,
-  getCycleDuration, ensureSynth, setNoteCallback, setSceneProvider, getAudioContext,
+  getCycleDuration, ensureSynth, setNoteCallback, setSceneProvider, getAudioContext, getVisualTransport,
   setShapeFx, setMasterFx, applyMasterFx,
 };

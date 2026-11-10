@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { View, Text, Pressable, StyleSheet, Modal, ScrollView } from 'react-native';
 import { COLORS, UI, TIMBRES, DRUM_TIMBRES, SCALE_CATEGORIES, NO_TRANSPOSE_SCALES, NOTE_NAMES, PITCH } from '../constants.js';
-import { updateState, safePanelScene } from '../state.js';
+import { updateState } from '../state.js';
+import { editLayerAll } from '../looper.js';
 import { swapTimbre, rescheduleAll } from '../audio/audioEngine.js';
 import { setScalePreset, getCurrentScaleName } from '../scale.js';
 
@@ -30,40 +31,40 @@ export default function TimbreRow({ shape, color }) {
     const shapeId = shape.id;
     const wasDrum = DRUM_TIMBRES.has(shape.timbre);
     const isDrum = DRUM_TIMBRES.has(timbreId);
-    // Fix #3: bounds-check activeSceneIndex
+    // The instrument belongs to the LAYER: every bar's copy switches (and
+    // is converted melodic ↔ drum) together — no bar is left with the old
+    // instrument or with melodic pitches on a drum kit. Loop rules unchanged.
     updateState(s => {
-      const scene = safePanelScene(s);
-      if (!scene) return;
-      const sh = scene.shapes.find(ss => ss.id === shapeId);
-      if (!sh) return;
-      sh.timbre = timbreId;
-      // Convert pitches when switching between melodic ↔ drum
-      if (isDrum && !wasDrum) {
-        // Melodic → drum: set each vertex to its slot (kick/snare/hihat/perc cycling)
-        for (let i = 0; i < sh.vertices.length; i++) {
-          sh.vertices[i].pitches = [i % 4];
-          sh.vertices[i].muted = false;
-          if (sh.vertices[i].subs) {
-            for (const sub of sh.vertices[i].subs) {
-              sub.pitches = [];
-              sub.muted = true;
+      editLayerAll(s, shapeId, (sh) => {
+        sh.timbre = timbreId;
+        // Convert pitches when switching between melodic ↔ drum
+        if (isDrum && !wasDrum) {
+          // Melodic → drum: set each vertex to its slot (kick/snare/hihat/perc cycling)
+          for (let i = 0; i < sh.vertices.length; i++) {
+            sh.vertices[i].pitches = [i % 4];
+            sh.vertices[i].muted = false;
+            if (sh.vertices[i].subs) {
+              for (const sub of sh.vertices[i].subs) {
+                sub.pitches = [];
+                sub.muted = true;
+              }
+            }
+          }
+        } else if (!isDrum && wasDrum) {
+          // Drum → melodic: main steps get the default pitch, subdivision
+          // steps reset to the muted default (matches makeDefaultStep)
+          for (const v of sh.vertices) {
+            v.pitches = [PITCH.defaultPitch];
+            v.muted = false;
+            if (v.subs) {
+              for (const sub of v.subs) {
+                sub.pitches = [];
+                sub.muted = true;
+              }
             }
           }
         }
-      } else if (!isDrum && wasDrum) {
-        // Drum → melodic: main steps get the default pitch, subdivision
-        // steps reset to the muted default (matches makeDefaultStep)
-        for (const v of sh.vertices) {
-          v.pitches = [PITCH.defaultPitch];
-          v.muted = false;
-          if (v.subs) {
-            for (const sub of v.subs) {
-              sub.pitches = [];
-              sub.muted = true;
-            }
-          }
-        }
-      }
+      });
     });
     swapTimbre({ ...shape, timbre: timbreId });
     rescheduleAll();

@@ -1,8 +1,10 @@
 import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { COLORS, UI, MIN_SIDES, MAX_SIDES, MAX_SUBDIVISION, makeDefaultFx } from '../constants.js';
-import { getState, updateState, generateShapeId, safePanelScene } from '../state.js';
+import { updateState, generateShapeId, panelBarIndex } from '../state.js';
 import { rescheduleAll } from '../audio/audioEngine.js';
+import { editLayerBar, removeLayer, addLayer, setLoopLength } from '../looper.js';
+import { rebuildPlaybackOrder } from '../sequencer.js';
 import { PITCH } from '../constants.js';
 
 const SHAPE_NAMES = {
@@ -19,7 +21,8 @@ function makeDefaultStep() {
   return { pitches: [], velocity: PITCH.defaultVelocity, muted: true };
 }
 
-export default function PanelHeader({ shape, color }) {
+// loopLength = this layer's phrase length in bars (its own looping rule)
+export default function PanelHeader({ shape, color, loopLength = 1, maxLoop = 8 }) {
   if (!shape) return null;
 
   const sub = shape.subdivision || 1;
@@ -29,25 +32,23 @@ export default function PanelHeader({ shape, color }) {
     const newSides = shape.sides + delta;
     if (newSides < MIN_SIDES || newSides > MAX_SIDES) return;
 
-    // Fix #3: bounds-check activeSceneIndex
+    // Pattern edit → lands on the edited bar only (looper.js)
     updateState(s => {
-      const scene = safePanelScene(s);
-      if (!scene) return;
-      const sh = scene.shapes.find(ss => ss.id === shapeId);
-      if (!sh) return;
-      sh.sides = newSides;
-      s.ui.selectedNotes = [];
-      if (delta > 0) {
-        const sub = sh.subdivision || 1;
-        const newVertex = { pitches: [PITCH.defaultPitch], velocity: PITCH.defaultVelocity, muted: false, subs: [] };
-        for (let i = 1; i < sub; i++) {
-          newVertex.subs.push(makeDefaultStep());
+      editLayerBar(s, panelBarIndex(s), shapeId, (sh) => {
+        sh.sides = newSides;
+        if (delta > 0) {
+          const sub = sh.subdivision || 1;
+          const newVertex = { pitches: [PITCH.defaultPitch], velocity: PITCH.defaultVelocity, muted: false, subs: [] };
+          for (let i = 1; i < sub; i++) {
+            newVertex.subs.push(makeDefaultStep());
+          }
+          sh.vertices.push(newVertex);
+        } else {
+          sh.vertices.pop();
         }
-        sh.vertices.push(newVertex);
-      } else {
-        sh.vertices.pop();
-        if (s.ui.selectedNodeIndex >= newSides) s.ui.selectedNodeIndex = newSides - 1;
-      }
+      });
+      s.ui.selectedNotes = [];
+      if (s.ui.selectedNodeIndex >= newSides) s.ui.selectedNodeIndex = newSides - 1;
     });
     rescheduleAll();
   }
@@ -57,37 +58,33 @@ export default function PanelHeader({ shape, color }) {
     const newSub = oldSub + delta;
     if (newSub < 1 || newSub > MAX_SUBDIVISION) return;
 
-    // Fix #3: bounds-check activeSceneIndex
     updateState(s => {
-      const scene = safePanelScene(s);
-      if (!scene) return;
-      const sh = scene.shapes.find(ss => ss.id === shapeId);
-      if (!sh) return;
-      sh.subdivision = newSub;
       s.ui.selectedNotes = [];
-      for (const v of sh.vertices) {
-        if (!v.subs) v.subs = [];
-        while (v.subs.length < newSub - 1) {
-          v.subs.push(makeDefaultStep());
+      editLayerBar(s, panelBarIndex(s), shapeId, (sh) => {
+        sh.subdivision = newSub;
+        for (const v of sh.vertices) {
+          if (!v.subs) v.subs = [];
+          while (v.subs.length < newSub - 1) {
+            v.subs.push(makeDefaultStep());
+          }
+          while (v.subs.length > newSub - 1) {
+            v.subs.pop();
+          }
         }
-        while (v.subs.length > newSub - 1) {
-          v.subs.pop();
-        }
-      }
+      });
     });
     rescheduleAll();
   }
 
+  // Deleting removes the whole layer (every bar) — layers are instruments
   function deleteShape() {
-    // Fix #3: bounds-check activeSceneIndex
     updateState(s => {
-      const sc = safePanelScene(s);
-      if (!sc) return;
-      sc.shapes = sc.shapes.filter(sh => sh.id !== shapeId);
-      if (sc.shapes.length === 0) {
-        const newId = generateShapeId();
-        sc.shapes.push({
-          id: newId, sides: 3, colorIndex: 0, timbre: "epiano", volume: 1.0, subdivision: 1, fx: makeDefaultFx(),
+      const order = s.layerOrder || [];
+      const idx = order.indexOf(shapeId);
+      removeLayer(s, shapeId);
+      if ((s.layerOrder || []).length === 0) {
+        addLayer(s, {
+          id: generateShapeId(), sides: 3, colorIndex: 0, timbre: "epiano", volume: 1.0, subdivision: 1, fx: makeDefaultFx(),
           vertices: [
             { pitches: [60], velocity: 100, muted: false, subs: [] },
             { pitches: [64], velocity: 85, muted: false, subs: [] },
@@ -95,8 +92,21 @@ export default function PanelHeader({ shape, color }) {
           ],
         });
       }
-      s.ui.panelShapeId = sc.shapes[0]?.id || null;
+      // Select the neighbouring layer (was: always the first one)
+      const left = s.layerOrder;
+      s.ui.panelShapeId = left[Math.max(0, Math.min(idx, left.length - 1))] || null;
+      s.ui.selectedNodeIndex = 0;
+      s.ui.selectedNotes = [];
+      if (s.ui.fxPanel === shapeId) s.ui.fxPanel = null;
     });
+    rescheduleAll();
+  }
+
+  function changeLoop(delta) {
+    const n = loopLength + delta;
+    if (n < 1 || n > maxLoop) return;
+    updateState(s => { setLoopLength(s, shapeId, n); });
+    rebuildPlaybackOrder(); // the song may have grown to fit the phrase
     rescheduleAll();
   }
 
@@ -104,7 +114,7 @@ export default function PanelHeader({ shape, color }) {
     <View style={styles.header}>
       <View style={styles.titleRow}>
         <View style={[styles.colorDot, { backgroundColor: color.main }]} />
-        <Text style={styles.title}>{getShapeName(shape.sides)}</Text>
+        <Text style={styles.title} numberOfLines={1}>{getShapeName(shape.sides)}</Text>
       </View>
 
       <View style={styles.controls}>
@@ -148,6 +158,29 @@ export default function PanelHeader({ shape, color }) {
           </Pressable>
         </View>
 
+        {/* Loop length — this layer's own phrase, tinted in its color */}
+        <View style={[styles.stepper, { backgroundColor: color.fill }]}>
+          <Pressable
+            style={[styles.stepperBtnTight, loopLength <= 1 && styles.disabled]}
+            onPress={() => changeLoop(-1)}
+            disabled={loopLength <= 1}
+            hitSlop={4}
+          >
+            <Text style={[styles.stepperBtnText, { color: color.main }]}>{'\u2212'}</Text>
+          </Pressable>
+          <Text style={[styles.stepperVal, { color: color.main }]}>
+            <Text style={[styles.stepperLabel, { color: color.main }]}>{'\u21BB'}</Text>{loopLength}
+          </Text>
+          <Pressable
+            style={[styles.stepperBtnTight, loopLength >= maxLoop && styles.disabled]}
+            onPress={() => changeLoop(1)}
+            disabled={loopLength >= maxLoop}
+            hitSlop={4}
+          >
+            <Text style={[styles.stepperBtnText, { color: color.main }]}>+</Text>
+          </Pressable>
+        </View>
+
         {/* Delete */}
         <Pressable style={styles.deleteBtn} onPress={deleteShape}>
           <Text style={styles.deleteBtnText}>{'\u00D7'}</Text>
@@ -171,6 +204,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    flexShrink: 1,
+    marginRight: 6,
   },
   colorDot: {
     width: 12,
@@ -178,6 +213,7 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   title: {
+    flexShrink: 1,
     fontSize: 15,
     fontWeight: '800',
     color: COLORS.text,
@@ -185,7 +221,7 @@ const styles = StyleSheet.create({
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
   },
   stepper: {
     flexDirection: 'row',
@@ -196,6 +232,10 @@ const styles = StyleSheet.create({
   },
   stepperBtn: {
     paddingHorizontal: 11,
+    paddingVertical: 6,
+  },
+  stepperBtnTight: {
+    paddingHorizontal: 7,
     paddingVertical: 6,
   },
   stepperBtnText: {

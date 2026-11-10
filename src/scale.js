@@ -1,4 +1,4 @@
-import { SCALE_DEFINITIONS, PITCH } from './constants.js';
+import { SCALE_DEFINITIONS, PITCH, DRUM_TIMBRES } from './constants.js';
 import { getState, updateState } from './state.js';
 
 function togglePitchClass(pitchClass) {
@@ -57,23 +57,24 @@ function snapPitchToScale(pitch) {
   return Math.max(PITCH.min, Math.min(PITCH.max, snapped));
 }
 
-// Snap vertices in the currently EDITED scene (panelSceneIndex)
+// Snap every bar's vertices to the (global) scale. Was: only the edited
+// bar, which left other bars — and loop repeats — playing out-of-key notes.
+// The same snap applied to sources and repeats keeps them identical, so
+// no loop rule changes.
+function snapStep(st) {
+  if (!st.muted && st.pitches) st.pitches = st.pitches.map(p => snapPitchToScale(p));
+}
+
 function snapAllVerticesToScale() {
   updateState(s => {
-    const idx = s.ui ? s.ui.panelSceneIndex : 0;
-    const scene = s.scenes[Math.max(0, Math.min(idx, s.scenes.length - 1))];
-    if (!scene) return;
-    for (const shape of scene.shapes) {
-      for (const v of shape.vertices) {
-        if (!v.muted && v.pitches) {
-          v.pitches = v.pitches.map(p => snapPitchToScale(p));
-        }
-        if (v.subs) {
-          for (const sub of v.subs) {
-            if (!sub.muted && sub.pitches) {
-              sub.pitches = sub.pitches.map(p => snapPitchToScale(p));
-            }
-          }
+    for (const scene of s.scenes || []) {
+      for (const shape of (scene && scene.shapes) || []) {
+        // Drum layers store kit SLOT indices (0-3), not pitches — snapping
+        // them to a scale would remap kick/snare/hat to the wrong drums
+        if (DRUM_TIMBRES.has(shape.timbre)) continue;
+        for (const v of shape.vertices || []) {
+          snapStep(v);
+          for (const sub of v.subs || []) snapStep(sub);
         }
       }
     }

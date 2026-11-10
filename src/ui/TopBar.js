@@ -65,8 +65,15 @@ export default React.memo(function TopBar() {
   }
 
   function handleNew() {
+    // initState() replaces ui too — keep the transport flags, or the UI
+    // shows "paused" while the engine keeps playing the new project
+    const prevUi = getState().ui;
     initState();
+    getState().ui.audioStarted = prevUi.audioStarted;
+    getState().ui.playing = prevUi.playing;
     updateCycleDuration();
+    // The old project's song length must not outlive it (stale bar order)
+    rebuildPlaybackOrder();
     rescheduleAll();
     updateState(() => {});
     setProjectsOpen(false);

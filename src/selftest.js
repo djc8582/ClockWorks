@@ -20,6 +20,7 @@ import {
   updateBPM, setShapeFx, setMasterFx,
 } from './audio/audioEngine.js';
 import { generateShapeId } from './state.js';
+import { normalizeLoops, removeLayer } from './looper.js';
 import { saveProject, listProjects, loadProject, deleteProject } from './projects.js';
 import { buildMidiDataUri } from './midi/midiExport.js';
 import { renderAudioMix, setSampleBanks } from './export/audioExport.js';
@@ -241,6 +242,9 @@ export async function runSelfTest() {
       s.scenes[1] = { shapes: [mkShape(4)] };
       s.enabledSlots = [true, true, false, false, false, false, false, false];
       s.activeSceneIndex = 0;
+      // Raw scene writes → re-derive per-layer loops (legacy migration path)
+      s.layerOrder = undefined; s.layerLoops = undefined;
+      normalizeLoops(s);
     });
     rebuildPlaybackOrder();
     resetCycleCount();
@@ -270,6 +274,8 @@ export async function runSelfTest() {
       s.enabledSlots = [true, false, false, false, false, false, false, false];
       s.scenes[1] = { shapes: [] };
       s.activeSceneIndex = 0;
+      s.layerOrder = undefined; s.layerLoops = undefined;
+      normalizeLoops(s);
     });
     rebuildPlaybackOrder();
     rescheduleAll();
@@ -311,12 +317,15 @@ export async function runSelfTest() {
     const after = getState().scenes[0].shapes.length;
     if (after !== before + 1) return false;
     const newId = getState().ui.panelShapeId;
+    // A layer lives in every bar — it must be removed from all of them
+    if (getState().scenes.some(sc => !sc.shapes.some(sh => sh.id === newId))) return false;
     updateState(s => {
-      s.scenes[0].shapes = s.scenes[0].shapes.filter(sh => sh.id !== newId);
+      removeLayer(s, newId);
       s.ui.panelShapeId = s.scenes[0].shapes[0]?.id || null;
     });
     rescheduleAll();
-    return getState().scenes[0].shapes.length === before;
+    return getState().scenes.every(sc => !sc.shapes.some(sh => sh.id === newId)) &&
+      getState().scenes[0].shapes.length === before;
   });
 
   // ── Sequencer ──────────────────────────────────────────────

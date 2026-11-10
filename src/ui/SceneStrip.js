@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, Pressable, StyleSheet } from 'react-native';
 import { COLORS, UI } from '../constants.js';
 import { getState, updateState } from '../state.js';
+import { stripModel, stripSignature, songLength, extendSongTo, revertBar, shrinkSong } from '../looper.js';
 import { rescheduleAll } from '../audio/audioEngine.js';
 import { rebuildPlaybackOrder } from '../sequencer.js';
 import { useStore } from '../hooks/useStore.js';
@@ -18,112 +19,127 @@ function MixerToggle() {
   );
 }
 
+// Bar strip. Bars are the song's slots; what each bar shows is the
+// SELECTED layer's looping, drawn in that layer's color:
+//   solid tint + outline  → the layer has its own pattern in this bar
+//   dashed outline + ↻N   → this bar repeats bar N of the layer's loop
+//   underline             → bar is part of the layer's phrase (loop length)
+// A row of small dots shows every layer's state in its own color
+// (filled = own pattern, ring = repeat).
+// Tap a bar → edit it (bars past the song end extend the song).
+// Tap the bar being edited → drop this layer's edit there (back to the
+// loop); if nothing is left on the last bar, tap again to shorten the song.
 export default React.memo(function SceneStrip() {
   const activeIndex = useStore(s => s.activeSceneIndex);
-  const enabledSlots = useStore(s => s.enabledSlots);
   const playing = useStore(s => s.ui.playing);
-
-  // Find the last editable slot (highest enabled)
-  let lastEnabled = 0;
-  if (enabledSlots) {
-    for (let i = enabledSlots.length - 1; i >= 0; i--) {
-      if (enabledSlots[i]) { lastEnabled = i; break; }
-    }
-  }
-
-  // panelSceneIndex = which scene the piano roll edits
-  // activeSceneIndex = which scene is currently playing (controlled by sequencer)
   const editIndex = useStore(s => s.ui.panelSceneIndex);
+  const selectedId = useStore(s => s.ui.panelShapeId);
+  // Primitive signature → re-render only when the strip actually changes
+  useStore(s => stripSignature(s, s.ui.panelShapeId));
+  const model = stripModel(getState(), selectedId);
+  const pal = COLORS.shapes[model.selectedColorIndex % COLORS.shapes.length];
 
   function onSlotPress(index) {
     const state = getState();
-    const enabled = state.enabledSlots || [];
-    const isEnabled = enabled[index];
+    const lenBefore = songLength(state);
     const isCurrentEdit = index === state.ui.panelSceneIndex;
+    const layerId = stripModel(state, state.ui.panelShapeId).selectedId;
 
-    if (index === 0) {
-      // Slot 1 is always enabled — just select it for editing
+    if (isCurrentEdit) {
+      let changed = false;
       updateState(s => {
-        s.ui.panelSceneIndex = 0;
-        s.ui.panelShapeId = null;
-      });
-      return;
-    }
-
-    if (isEnabled && isCurrentEdit) {
-      // Tap enabled+editing slot → disable it, clear shapes, edit slot 0
-      updateState(s => {
-        s.enabledSlots[index] = false;
-        s.scenes[index] = { shapes: [] };
-        s.ui.panelSceneIndex = 0;
-        s.ui.panelShapeId = null;
-      });
-      rebuildPlaybackOrder();
-      rescheduleAll();
-      return;
-    }
-
-    if (!isEnabled) {
-      // Tap empty slot → copy scene into it, enable, and select for editing — all in one update
-      updateState(s => {
-        const srcScene = s.scenes[s.ui.panelSceneIndex];
-        const copy = JSON.parse(JSON.stringify(srcScene || { shapes: [] }));
-        for (const shape of copy.shapes) {
-          shape.id = "shape-" + Date.now() + "-" + Math.floor(Math.random() * 1e6);
+        if (layerId && revertBar(s, layerId, index)) { changed = true; return; }
+        if (index === songLength(s) - 1 && shrinkSong(s)) {
+          changed = true;
+          s.ui.panelSceneIndex = index - 1;
+          if (!s.ui.playing) s.activeSceneIndex = index - 1;
+          s.ui.selectedNotes = [];
         }
-        s.scenes[index] = copy;
-        s.enabledSlots[index] = true;
-        s.ui.panelSceneIndex = index;
-        s.ui.panelShapeId = copy.shapes.length > 0 ? copy.shapes[0].id : null;
-        s.ui.selectedNodeIndex = 0;
       });
-      rebuildPlaybackOrder();
-      rescheduleAll();
+      if (changed) {
+        rebuildPlaybackOrder();
+        rescheduleAll();
+      }
       return;
     }
 
-    // Select already-enabled slot for editing
     updateState(s => {
+      extendSongTo(s, index);
       s.ui.panelSceneIndex = index;
-      const scene = s.scenes[index];
-      s.ui.panelShapeId = scene && scene.shapes.length > 0 ? scene.shapes[0].id : null;
-      s.ui.selectedNodeIndex = 0;
+      // Stopped: the canvas follows the edited bar (and play starts there).
+      // Playing: the canvas keeps following the clock.
+      if (!s.ui.playing) s.activeSceneIndex = index;
+      // Layers keep their id in every bar — keep the selected layer
+      const shapes = (s.scenes[index] && s.scenes[index].shapes) || [];
+      if (!shapes.some(sh => sh.id === s.ui.panelShapeId)) {
+        s.ui.panelShapeId = shapes.length > 0 ? shapes[0].id : null;
+        s.ui.selectedNodeIndex = 0;
+      }
+      s.ui.selectedNotes = [];
     });
+    if (songLength(getState()) !== lenBefore) {
+      rebuildPlaybackOrder();
+      rescheduleAll();
+    }
   }
 
   return (
     <View style={styles.container}>
       <View style={styles.slots}>
-        {Array.from({ length: 8 }, (_, i) => {
-          const enabled = enabledSlots && enabledSlots[i];
+        {model.bars.map((b) => {
+          const i = b.bar;
           const isEditing = i === editIndex;
           const isPlaying = i === activeIndex && playing;
-          const inRange = i <= lastEnabled;
-          // Each slot borrows a palette color — the strip reads like the
-          // colored vertex dots on the canvas
-          const pal = COLORS.shapes[i % COLORS.shapes.length];
+          const own = b.inSong && b.kind === 'unique';
+          const repeat = b.inSong && b.kind === 'repeat';
 
           return (
             <Pressable
               key={i}
+              accessibilityLabel={`Bar ${i + 1}` + (repeat ? `, repeats bar ${b.source + 1}` : own ? ', own pattern' : '')}
               style={[
                 styles.slot,
-                inRange && !enabled && styles.slotLooped,
-                enabled && !isEditing && { backgroundColor: pal.fill },
-                isEditing && [styles.slotEditing, { backgroundColor: pal.main }],
+                own && { backgroundColor: pal.fill, borderColor: pal.main },
+                repeat && [styles.slotRepeat, { borderColor: pal.dim }],
+                isEditing && [styles.slotEditing, { backgroundColor: pal.main, borderColor: pal.main }],
               ]}
               onPress={() => onSlotPress(i)}
             >
               <Text style={[
                 styles.slotText,
-                inRange && styles.slotTextInRange,
-                enabled && !isEditing && { color: pal.main },
+                own && { color: pal.main },
+                repeat && { color: pal.dim },
                 isEditing && styles.slotTextEditing,
               ]}>
                 {i + 1}
               </Text>
-              {isPlaying && !isEditing && (
-                <View style={[styles.playingDot, { backgroundColor: pal.main }]} />
+              {repeat && (
+                <Text style={[styles.repeatCaption, { color: isEditing ? '#fff' : pal.dim }]}>
+                  {'\u21BB'}{b.source + 1}
+                </Text>
+              )}
+              {b.inSong && b.layers.length > 1 && (
+                <View style={styles.layerDots}>
+                  {b.layers.map(l => {
+                    const c = COLORS.shapes[l.colorIndex % COLORS.shapes.length];
+                    const dotColor = isEditing ? '#fff' : c.main;
+                    return (
+                      <View
+                        key={l.id}
+                        style={[
+                          styles.layerDot,
+                          l.unique ? { backgroundColor: dotColor } : { borderWidth: 1, borderColor: dotColor },
+                        ]}
+                      />
+                    );
+                  })}
+                </View>
+              )}
+              {b.inPhrase && b.inSong && (
+                <View style={[styles.phraseBar, { backgroundColor: isEditing ? '#fff' : pal.main }]} />
+              )}
+              {isPlaying && (
+                <View style={[styles.playingDot, { backgroundColor: isEditing ? '#fff' : pal.main }]} />
               )}
             </Pressable>
           );
@@ -152,14 +168,46 @@ const styles = StyleSheet.create({
   },
   slot: {
     flex: 1,
-    paddingVertical: 8,
-    borderRadius: UI.pill,
+    paddingVertical: 6,
+    minHeight: 34,
+    borderRadius: UI.radiusSmall,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
     backgroundColor: 'rgba(0,0,0,0.04)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  slotLooped: {
-    backgroundColor: 'rgba(0,0,0,0.08)',
+  slotRepeat: {
+    backgroundColor: 'transparent',
+    borderStyle: 'dashed',
+  },
+  repeatCaption: {
+    fontSize: 8,
+    fontWeight: '800',
+    marginTop: -1,
+  },
+  layerDots: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 2,
+    marginTop: 2,
+    maxHeight: 12,
+    overflow: 'hidden',
+    paddingHorizontal: 2,
+  },
+  layerDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
+  phraseBar: {
+    position: 'absolute',
+    bottom: 2,
+    left: '30%',
+    right: '30%',
+    height: 2,
+    borderRadius: 1,
   },
   slotEditing: {
     ...UI.softShadow,
@@ -168,9 +216,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     color: 'rgba(0,0,0,0.18)',
-  },
-  slotTextInRange: {
-    color: 'rgba(0,0,0,0.35)',
   },
   slotTextEditing: {
     color: '#fff',

@@ -1,6 +1,7 @@
 import { useMemo, useCallback } from 'react';
 import { Gesture } from 'react-native-gesture-handler';
-import { getState, getShapes, updateState, generateShapeId, safePanelScene } from '../state.js';
+import { getState, getShapes, updateState, generateShapeId } from '../state.js';
+import { addLayer } from '../looper.js';
 import { calculateRingRadii } from '../shapes.js';
 import { hitTest, hitTestGhostRing, getNextSideCount, getNextColorIndex } from './hitTesting.js';
 import { initAudio, startPlayback, pauseAudio, resumeAudio, rescheduleAll } from '../audio/audioEngine.js';
@@ -26,7 +27,12 @@ export function handlePlayPause() {
   }
   if (state.ui.playing) {
     pauseAudio();
-    updateState(s => { s.ui.playing = false; });
+    // Stopped ⇒ the canvas shows the bar being edited (and play restarts
+    // from it), so canvas, bar strip and piano roll never disagree
+    updateState(s => {
+      s.ui.playing = false;
+      s.activeSceneIndex = s.ui.panelSceneIndex;
+    });
   } else {
     // Restart from beginning of sequence
     resetCycleCount();
@@ -77,8 +83,12 @@ function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
   const hit = hitTest(x, y, shapes, radii, centerX, centerY);
   if (hit) {
     updateState(s => {
+      // Layers keep one id in every bar, so selecting the layer is enough.
+      // While playing, the canvas shows whichever bar is sounding — do NOT
+      // move the edit bar to it, or the next piano-roll edit lands on a
+      // bar the user never chose. Stopped: canvas and editor show the same bar.
       s.ui.panelShapeId = hit.shape.id;
-      s.ui.panelSceneIndex = s.activeSceneIndex;
+      if (!s.ui.playing) s.ui.panelSceneIndex = s.activeSceneIndex;
       s.ui.selectedNodeIndex = hit.vertexIndex;
       s.ui.selectedNotes = [];
     });
@@ -146,15 +156,16 @@ export function addNewShape(sides) {
     vertices.push({ pitches: [], velocity: PITCH.defaultVelocity, muted: true, subs: [] });
   }
 
-  // Fix #3: bounds-check activeSceneIndex before mutating
+  // A new layer exists in every bar; its loop rules are copied from the
+  // layer directly below it, then it loops on its own (looper.js addLayer).
+  // The edit bar is left alone (was: jumped to the playing bar while the
+  // shape had been pushed into the edit bar → selection pointed at a shape
+  // missing from the bar now shown, and the panel went blank).
   updateState(s => {
-    const scene = safePanelScene(s);
-    if (!scene) return;
-    scene.shapes.push({
+    addLayer(s, {
       id: newId, sides, colorIndex: newColor, timbre: newTimbre, volume: 1.0, subdivision: 1, fx: makeDefaultFx(), vertices,
     });
     s.ui.panelShapeId = newId;
-    s.ui.panelSceneIndex = s.activeSceneIndex;
     s.ui.selectedNodeIndex = 0;
     s.ui.selectedNotes = [];
   });

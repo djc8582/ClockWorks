@@ -3,6 +3,7 @@
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { getState } from '../state.js';
+import { songLength } from '../looper.js';
 import { TIMING } from '../constants.js';
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
@@ -161,9 +162,11 @@ export function buildSheetHTML(state) {
 
   let parts = '';
   let sceneCount = 0;
-  for (let si = 0; si < state.scenes.length; si++) {
+  // Only the song's bars (later slots hold loop repeats for the strip preview)
+  const nBars = Array.isArray(state.enabledSlots) ? songLength(state) : state.scenes.length;
+  for (let si = 0; si < nBars; si++) {
     const scene = state.scenes[si];
-    if (!scene.shapes || scene.shapes.length === 0) continue; // skip empty slots
+    if (!scene || !scene.shapes || scene.shapes.length === 0) continue; // skip empty slots
     sceneCount++;
     parts += `<h2 style="color:#666;font-size:13px;border-bottom:1px solid #eee;padding-bottom:3px;margin-top:20px;">Scene ${si + 1}</h2>`;
     for (let shi = 0; shi < scene.shapes.length; shi++) {

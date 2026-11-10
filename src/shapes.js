@@ -81,10 +81,15 @@ function calculateRingRadii(shapeCount, maxRadius, minRadius) {
   if (shapeCount === 0) return [];
   if (shapeCount === 1) return [maxRadius * 0.75];
 
+  // Few layers → keep the innermost ring large enough that its notes don't
+  // overlap and stay tappable (was a flat 18% of maxRadius: with 2 layers the
+  // inner shape collapsed into a cluster of overlapping nodes). Rings tighten
+  // toward minRadius only as layers are added.
+  const inner = Math.max(minRadius, maxRadius * (0.5 - 0.06 * (shapeCount - 2)));
   const radii = [];
   for (let i = 0; i < shapeCount; i++) {
     const t = i / (shapeCount - 1);
-    radii.push(minRadius + t * (maxRadius - minRadius));
+    radii.push(inner + t * (maxRadius - inner));
   }
   return radii;
 }

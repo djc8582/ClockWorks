@@ -1,4 +1,5 @@
 import { PITCH, MAX_SCENES, MAX_SIDES, MAX_SHAPES, MAX_SUBDIVISION, AUDIO, makeDefaultFx, makeDefaultMasterFx } from './constants.js';
+import { normalizeLoops } from './looper.js';
 
 let state = null;
 const listeners = [];
@@ -34,7 +35,9 @@ function createDefaultState() {
   for (let i = 0; i < 8; i++) {
     scenes.push(i === 0 ? createDefaultScene() : { shapes: [] });
   }
-  return {
+  // normalizeLoops turns the single scene into per-layer loop state
+  // (layerOrder/layerLoops) and materializes the layer into every bar
+  return normalizeLoops({
     bpm: 120,
     scale: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
     activeSceneIndex: 0,
@@ -63,7 +66,7 @@ function createDefaultState() {
       bpmLabel: null,
       scaleName: null,
     },
-  };
+  });
 }
 
 function initState() {
@@ -108,9 +111,11 @@ function clearListeners() {
 function refreshRefs() {
   try {
     if (state.scenes) {
-      const active = state.activeSceneIndex;
-      const panel = state.ui ? state.ui.panelSceneIndex : active;
-      for (const idx of new Set([active, panel])) {
+      // Every bar is refreshed: with per-layer loops a single edit can
+      // rewrite any bar (repeats, layer-wide instrument/volume/fx), and the
+      // FX rack / mixer may be looking at a bar that is neither active nor
+      // edited. 8 bars × ≤20 shallow copies is negligible.
+      for (let idx = 0; idx < state.scenes.length; idx++) {
         const scene = state.scenes[idx];
         if (scene) {
           if (!Array.isArray(scene.shapes)) {
@@ -124,6 +129,7 @@ function refreshRefs() {
       }
       state.scenes = [...state.scenes];
     }
+    if (state.layerLoops) state.layerLoops = { ...state.layerLoops };
     if (state.ui) state.ui = { ...state.ui };
     state = { ...state };
   } catch (e) {
@@ -189,6 +195,13 @@ function safeActiveScene(s) {
     s.activeSceneIndex = Math.max(0, s.scenes.length - 1);
   }
   return s.scenes[s.activeSceneIndex];
+}
+
+// Index of the bar the piano roll is editing, clamped to the scenes array
+function panelBarIndex(s) {
+  const n = s.scenes ? s.scenes.length : 0;
+  const idx = s.ui ? s.ui.panelSceneIndex : 0;
+  return idx >= 0 && idx < n ? idx : 0;
 }
 
 // Safe panel scene accessor (for UI mutations — reads panelSceneIndex)
@@ -310,6 +323,13 @@ function sanitizeScenes(scenes) {
         if (v.velocity === undefined) v.velocity = PITCH.defaultVelocity;
         if (v.muted === undefined) v.muted = false;
         if (!v.subs) v.subs = [];
+        // One sub-step per subdivision beyond the first: a project that says
+        // subdivision 3 but carries fewer subs would draw cells that can't be
+        // toggled. Pad with empty (muted) steps, drop extras.
+        while (v.subs.length < shape.subdivision - 1) {
+          v.subs.push({ pitches: [], velocity: PITCH.defaultVelocity, muted: true });
+        }
+        if (v.subs.length > shape.subdivision - 1) v.subs.length = shape.subdivision - 1;
         for (const sub of v.subs) {
           if (!sub.pitches) sub.pitches = [PITCH.defaultPitch];
           if (sub.velocity === undefined) sub.velocity = PITCH.defaultVelocity;
@@ -329,6 +349,9 @@ function serializeState() {
     scale: state.scale,
     activeSceneIndex: state.activeSceneIndex,
     scenes: state.scenes,
+    enabledSlots: state.enabledSlots,
+    layerOrder: state.layerOrder,
+    layerLoops: state.layerLoops,
     effects: state.effects,
   };
   const json = JSON.stringify(toSerialize);
@@ -359,7 +382,16 @@ function deserializeState(hash) {
     state.bpm = parsed.bpm;
     state.scale = parsed.scale;
     state.activeSceneIndex = Math.max(0, Math.min(parsed.activeSceneIndex, parsed.scenes.length - 1));
+    if (state.ui) state.ui.panelSceneIndex = state.activeSceneIndex;
     state.scenes = parsed.scenes;
+    while (state.scenes.length < MAX_SCENES) state.scenes.push({ shapes: [] });
+    // Older links carried no slot list — treat every non-empty scene as edited
+    state.enabledSlots = Array.isArray(parsed.enabledSlots)
+      ? parsed.enabledSlots
+      : state.scenes.map((sc, i) => i === 0 || sc.shapes.length > 0);
+    state.layerOrder = parsed.layerOrder;
+    state.layerLoops = parsed.layerLoops;
+    normalizeLoops(state);
     if (parsed.effects) {
       state.effects = parsed.effects;
     }
@@ -382,6 +414,7 @@ export {
   getShapeById,
   safeActiveScene,
   safePanelScene,
+  panelBarIndex,
   clearListeners,
   generateShapeId,
   captureScene,

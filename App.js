@@ -181,10 +181,18 @@ function AppContent() {
   const addPanelOpen = useStore(s => s.ui.addPanelOpen);
   const addPanelSides = useStore(s => s.ui.addPanelSides);
 
+  // A stale id (layer deleted, project loaded) falls back to the first
+  // layer instead of leaving the editor blank
   const panelShape = useMemo(() =>
-    panelShapeId ? panelShapes.find(s => s.id === panelShapeId) : (panelShapes[0] || null),
+    (panelShapeId && panelShapes.find(s => s.id === panelShapeId)) || panelShapes[0] || null,
     [panelShapeId, panelShapes]
   );
+  const panelLoopLength = useStore(s => {
+    const id = s.ui.panelShapeId;
+    const loop = id && s.layerLoops ? s.layerLoops[id] : null;
+    return loop ? loop.loopLength : 1;
+  });
+  const maxLoop = useStore(s => s.scenes.length);
 
   const panelColor = panelShape
     ? COLORS.shapes[panelShape.colorIndex % COLORS.shapes.length]
@@ -192,7 +200,8 @@ function AppContent() {
 
   // Ensure panel always has a shape selected
   useEffect(() => {
-    if (!panelShapeId && panelShapes.length > 0) {
+    const stale = panelShapeId && !panelShapes.some(s => s.id === panelShapeId);
+    if ((!panelShapeId || stale) && panelShapes.length > 0) {
       updateState(s => {
         s.ui.panelShapeId = panelShapes[0].id;
         s.ui.selectedNodeIndex = 0;
@@ -231,7 +240,7 @@ function AppContent() {
 
       {/* Bottom panel: piano roll */}
       <View style={[styles.bottomPanel, { height: panelHeight, paddingBottom: insets.bottom }]}>
-        <PanelHeader shape={panelShape} color={panelColor} />
+        <PanelHeader shape={panelShape} color={panelColor} loopLength={panelLoopLength} maxLoop={maxLoop} />
         <TimbreRow shape={panelShape} color={panelColor} />
         <PianoRoll shape={panelShape} color={panelColor} />
       </View>

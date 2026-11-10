@@ -19,7 +19,7 @@ A polyrhythmic composition tool built with React Native and Expo Development Bui
 - State is a single mutable JS object in state.js, with `refreshRefs()` creating shallow copies for React
 - useSyncExternalStore bridges state.js to React components
 - Audio runs on native thread via react-native-audio-api
-- Clock hand animation driven by Reanimated shared values at 60fps
+- Clock hand animation driven by Reanimated shared values; angle comes from getVisualTransport() (smoothed audio clock, clockSmoother.js)
 - NO localStorage/AsyncStorage for state persistence
 - `cancelScheduledValues()` crashes on react-native-audio-api 0.6.5 — do NOT use it
 
@@ -30,7 +30,8 @@ Hybrid sample + synth architecture:
 - **Drum kit samples** (WAV): 3 kits × 4 slots (kick, snare, hihat, perc)
 - Samples preloaded at app startup, decoded when AudioContext initializes
 - Synth buffers rendered async in batches to avoid blocking JS thread
-- Voice pool capped at 24; evicted voices are hard-killed (immediate stop + guarded disconnect — deferred disconnects crash native audio on 0.6.5)
+- Voice pool capped at 48 (timbres.js MAX_VOICES); eviction picks the least audible victim (voicePolicy.js) — a hard stop of a sounding voice clicks on 0.6.5
+- Voice disconnects are ALWAYS targeted (`src.disconnect(gain)`, `gain.disconnect(dest)`). No-arg `disconnect()` iterates the node's output set on the JS thread while the audio thread may mutate it → crash
 
 ## File Structure
 ```
@@ -54,10 +55,15 @@ ClockWorks/
     ├── animation.js          # Easing functions
     ├── selftest.js           # In-app test suite (EXPO_PUBLIC_SELFTEST=1 npx expo start)
     ├── sequencer.js          # Cycle→scene mapping (sample-accurate scene loops)
+    ├── looper.js             # Per-layer loop model (pure, Node-tested)
     ├── audio/
     │   ├── audioEngine.js    # AudioContext, scheduler, note triggering
     │   ├── timbres.js        # Sample loading, synth rendering, voice management
-    │   └── scheduler.js      # Custom transport (setInterval 50ms + 150ms lookahead)
+    │   ├── scheduler.js      # Custom transport (setInterval 50ms + 150ms lookahead)
+    │   ├── eventWindow.js    # Pure step timing + per-tick note budget (shared with MIDI)
+    │   ├── voicePolicy.js    # Pure voice-eviction policy
+    │   ├── transportControl.js # Serialized suspend/resume (0.6.5 thread race)
+    │   └── clockSmoother.js  # Smooth audio clock for the clock hand
     ├── rendering/
     │   ├── CanvasView.js     # Root Skia Canvas + gesture wrapper + play/pause overlay
     │   ├── ShapeRenderer.js  # Polygon rendering
@@ -76,6 +82,7 @@ ClockWorks/
     │   ├── canvasGestures.js # Tap/pinch on Skia canvas + play/pause
     │   └── hitTesting.js     # Pure math hit testing
     ├── midi/
+    │   ├── midiBuild.js      # Pure MIDI builder (Node-tested)
     │   └── midiExport.js     # MIDI export via expo-sharing
     ├── export/
     │   ├── audioExport.js    # Offline WAV render + share
@@ -102,7 +109,24 @@ ClockWorks/
 - Self-test suite: `EXPO_PUBLIC_SELFTEST=1 npx expo start --dev-client --port 8082` then launch the app — [SELFTEST] PASS/FAIL lines appear in Metro (dev builds only)
 - Voice cleanup via pruneVoices on each triggerTimbre call — no setTimeout per voice
 - Evicted voices are hard-killed immediately (stop + disconnect, guarded by killed flag)
-- AppState listener suspends AudioContext on background, resumes on foreground
+- AppState listener suspends AudioContext on background, resumes on foreground (position + queued notes kept)
+- NEVER call audioContext.resume()/suspend() directly: on 0.6.5 each runs on its own native thread and they race. Go through `transport.request('running'|'suspended')` / `transport.kick()` (transportControl.js)
+- Pause = master fade → kill queued voices → suspend. Master gain ramps go through queueMasterRamp/setMasterTarget (0.6.5 drops param events that start before the queue end)
+- AudioContext is created with initSuspended: true (no audio-session activation until first play)
+- Interruptions (call/Siri) pause playback; route changes / a frozen clock trigger transport.kick() (suspend→resume restarts AVAudioEngine)
+- Scheduler tick never drops notes: overflow beyond the soft cap is deferred to the next tick (eventWindow.js planTick)
+- Pure, Node-tested modules: scheduler.js, eventWindow.js, voicePolicy.js, transportControl.js, clockSmoother.js, midi/midiBuild.js, looper.js — run `npm test`
+
+## Looper (per-layer loops — src/looper.js)
+- Bar = scene slot. Layer = shape; a layer keeps the SAME id in every bar (`state.layerOrder`, bottom → top)
+- Each layer owns `state.layerLoops[id] = { loopLength, unique[] }`: bars < loopLength are its phrase; `unique[b]` = own pattern in bar b; every other bar repeats bar `b % loopLength`
+- `state.scenes` is a fully materialized cache (every bar holds every layer) — audio/canvas/exports read it as-is; `syncLayers` rewrites repeat bars
+- Song = contiguous `enabledSlots` prefix (`songLength`); bars past it hold preview repeats and are NOT exported (`songScenes`)
+- Pattern edits (notes, mute, sides, subdivision) MUST go through `editLayerBar(state, bar, id, fn)` — a repeat bar becomes a single-bar override; nothing else changes
+- Layer-wide edits (instrument, volume, fx) go through `editLayerAll` / are propagated to every bar (`LAYER_FIELDS`)
+- New layer: `addLayer` copies loopLength + unique bars of the layer directly below (previous in layerOrder), then is independent. Delete: `removeLayer` (all bars)
+- Never write `scenes[b].shapes` directly from UI code; legacy/whole-scene data is migrated by `normalizeLoops` (called on default state, project load, link import)
+- Stopped ⇒ `activeSceneIndex === ui.panelSceneIndex` (canvas shows the edited bar, play starts there). Playing ⇒ the canvas follows the clock and the edit bar never moves on its own
 
 ## Rendering Rules
 - All canvas drawing via Skia declarative components

@@ -2,7 +2,8 @@ import React, { useRef, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { COLORS, UI, TIMBRES, makeDefaultFx } from '../constants.js';
-import { updateState, safeActiveScene } from '../state.js';
+import { updateState } from '../state.js';
+import { editLayerAll } from '../looper.js';
 import { rescheduleAll, setShapeFx } from '../audio/audioEngine.js';
 import { useStore } from '../hooks/useStore.js';
 
@@ -54,11 +55,11 @@ export default function Mixer() {
   useEffect(() => () => clearTimeout(rescheduleTimer.current), []);
 
   function onVolumeChange(shapeId, value) {
+    // Volume is layer-wide: every bar of the layer (was: only the bar
+    // playing at that moment, so the fader "reverted" on the next bar)
+    const vol = Math.round(value * 100) / 100;
     updateState(s => {
-      const scene = safeActiveScene(s);
-      if (!scene) return;
-      const sh = scene.shapes.find(ss => ss.id === shapeId);
-      if (sh) sh.volume = Math.round(value * 100) / 100;
+      editLayerAll(s, shapeId, (sh) => { sh.volume = vol; });
     });
     if (!rescheduleTimer.current) {
       rescheduleTimer.current = setTimeout(() => {
