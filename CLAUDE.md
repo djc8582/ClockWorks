@@ -73,8 +73,11 @@ ClockWorks/
     ├── ui/
     │   ├── TopBar.js         # BPM slider + projects modal + export modal
     │   ├── SceneStrip.js     # Scene slot buttons + mixer toggle
-    │   ├── PianoRoll.js      # Windowed melodic grid + drum step sequencer
-    │   ├── PianoRollCell.js  # Individual grid cell (React.memo)
+    │   ├── PianoRoll.js      # Piano roll + drum grid: one Skia picture, gestures on the UI thread
+    │   ├── rollGeometry.js   # Pure roll math: sizes, scroll limits, rubber band, hit test (Node-tested)
+    │   ├── rollData.js       # Pure: shape + scale → flat arrays the roll draws (Node-tested)
+    │   ├── rollDraw.js       # Worklet that draws the visible cells, header, labels
+    │   ├── SmoothSlider.js   # Slider that holds its value while dragged (no jitter)
     │   ├── PanelHeader.js    # Shape name, sides/subdivision steppers
     │   ├── TimbreRow.js      # Instrument + scale picker modals
     │   └── Mixer.js          # Per-shape volume sliders
@@ -115,7 +118,7 @@ ClockWorks/
 - AudioContext is created with initSuspended: true (no audio-session activation until first play)
 - Interruptions (call/Siri) pause playback; route changes / a frozen clock trigger transport.kick() (suspend→resume restarts AVAudioEngine)
 - Scheduler tick never drops notes: overflow beyond the soft cap is deferred to the next tick (eventWindow.js planTick)
-- Pure, Node-tested modules: scheduler.js, eventWindow.js, voicePolicy.js, transportControl.js, clockSmoother.js, midi/midiBuild.js, looper.js — run `npm test`
+- Pure, Node-tested modules: scheduler.js, eventWindow.js, voicePolicy.js, transportControl.js, clockSmoother.js, midi/midiBuild.js, looper.js, ui/rollGeometry.js, ui/rollData.js — run `npm test`
 
 ## Looper (per-layer loops — src/looper.js)
 - Bar = scene slot. Layer = shape; a layer keeps the SAME id in every bar (`state.layerOrder`, bottom → top)
@@ -131,7 +134,9 @@ ClockWorks/
 ## Rendering Rules
 - All canvas drawing via Skia declarative components
 - Clock hand uses Reanimated shared values for 60fps UI-thread updates
-- PianoRoll uses row windowing — only visible rows + buffer are mounted
+- Piano roll: NO per-cell React views. Scroll/zoom are shared values; useDerivedValue + createPicture redraws only the visible cells each frame (rollDraw.js). React only rebuilds rollData when the pattern content changes. Taps are hit-tested with rollGeometry.hitTest (same math as drawing). Scroll limits come from onLayout, never the screen size
+- FX graphs (FxViz.js) draw the finger's value locally, emit throttled, flush on release, and lock the panel scroll while dragging (FxDragContext)
+- Sliders: use ui/SmoothSlider.js, never a bare controlled @react-native-community/slider
 - Play/pause button uses native Pressable overlay for instant response
 
 ## Do NOT

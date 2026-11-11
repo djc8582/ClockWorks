@@ -2,7 +2,7 @@
   "expo": {
     "name": "Clockworks",
     "slug": "clockworks",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -13,7 +13,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.dylancantor.clockworks",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSMicrophoneUsageDescription": "Clockworks plays audio and does not record. Microphone access is required by the audio engine framework but is never used to capture audio."
