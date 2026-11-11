@@ -2,7 +2,7 @@
 // pattern: every effect shows its actual response, and you edit by
 // dragging the graph itself. All curves come from the SAME RBJ math the
 // audio graph runs (src/audio/dsp.js), so what you see is what you hear.
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useState, useContext, createContext } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { Canvas, Path, Circle, Line, Skia, vec } from '@shopify/react-native-skia';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -20,19 +20,68 @@ function useStableChange(onChange) {
   fnRef.current = onChange;
   const lastAt = useRef(0);
   const trailing = useRef(null);
-  return useMemo(() => (patch) => {
-    const now = Date.now();
-    clearTimeout(trailing.current);
-    if (now - lastAt.current > 33) {
-      lastAt.current = now;
-      fnRef.current(patch);
-    } else {
-      trailing.current = setTimeout(() => {
-        lastAt.current = Date.now();
+  return useMemo(() => {
+    const emit = (patch) => {
+      const now = Date.now();
+      clearTimeout(trailing.current);
+      if (now - lastAt.current > 33) {
+        lastAt.current = now;
         fnRef.current(patch);
-      }, 40);
-    }
+      } else {
+        trailing.current = setTimeout(() => {
+          lastAt.current = Date.now();
+          fnRef.current(patch);
+        }, 40);
+      }
+    };
+    // Finger lifted: the last position lands now, not after the throttle
+    emit.flush = (patch) => {
+      clearTimeout(trailing.current);
+      lastAt.current = Date.now();
+      if (patch) fnRef.current(patch);
+    };
+    return emit;
   }, []);
+}
+
+// The FX panel scrolls; while a finger is on a graph the panel must not scroll
+// under it. EffectsPanel provides this; outside it, it's a no-op.
+export const FxDragContext = createContext(() => {});
+
+// Drag state for a graph: the graph draws the finger's values immediately
+// (local state), the store/audio get them throttled, and the final value is
+// flushed on release so the handle never snaps back.
+function useGraphDrag(onChange, toPatch) {
+  const emit = useStableChange(onChange);
+  const setScrollLock = useContext(FxDragContext);
+  const [live, setLive] = useState(null);
+  const lastPatch = useRef(null);
+  const toPatchRef = useRef(toPatch);
+  toPatchRef.current = toPatch;
+  const lockRef = useRef(setScrollLock);
+  lockRef.current = setScrollLock;
+  const gesture = useMemo(() => {
+    const move = (e, first) => {
+      const patch = toPatchRef.current(e.x, e.y, first);
+      if (!patch) return;
+      lastPatch.current = patch;
+      setLive(patch);
+      emit(patch);
+    };
+    return Gesture.Pan()
+      .runOnJS(true)
+      .minDistance(0)
+      .shouldCancelWhenOutside(false)
+      .onBegin((e) => { lockRef.current(true); move(e, true); })
+      .onUpdate((e) => move(e, false))
+      .onFinalize(() => {
+        emit.flush(lastPatch.current);
+        lastPatch.current = null;
+        setLive(null);
+        lockRef.current(false);
+      });
+  }, []);
+  return { gesture, live };
 }
 
 export const VIZ_W = 262;
@@ -79,24 +128,20 @@ function Grid({ zeroLine = true }) {
 
 // ── Filter: response curve + XY pad (x = cutoff, y = resonance) ──
 export function FilterViz({ fx, color, onChange }) {
-  const cutoff = fx.cutoff !== undefined ? fx.cutoff : 1;
+  const { gesture: pan, live } = useGraphDrag(onChange, (x, y) => ({
+    cutoff: Math.round(xToNorm(x) * 100) / 100,
+    res: Math.round(Math.max(0, Math.min(1, 1 - (y - PAD) / (VIZ_H - PAD * 2))) * 100) / 100,
+  }));
+  const cutoff = live ? live.cutoff : (fx.cutoff !== undefined ? fx.cutoff : 1);
+  const res = live ? live.res : fx.res;
   const path = useMemo(() => {
     const hz = cutoffToHz(cutoff);
-    const c = biquadCoeffs(fx.filterType || 'lowpass', hz, resToQ(fx.res), 0);
+    const c = biquadCoeffs(fx.filterType || 'lowpass', hz, resToQ(res), 0);
     return curvePath(responseCurveDb([c]));
-  }, [fx.filterType, cutoff, fx.res]);
+  }, [fx.filterType, cutoff, res]);
 
   const handleX = freqToX(cutoffToHz(cutoff));
-  const handleY = PAD + (1 - Math.max(0, Math.min(1, fx.res))) * (VIZ_H - PAD * 2);
-
-  const emit = useStableChange(onChange);
-  const pan = useMemo(() => Gesture.Pan()
-    .runOnJS(true)
-    .onUpdate((e) => {
-      const c = xToNorm(e.x);
-      const r = Math.max(0, Math.min(1, 1 - (e.y - PAD) / (VIZ_H - PAD * 2)));
-      emit({ cutoff: Math.round(c * 100) / 100, res: Math.round(r * 100) / 100 });
-    }), []);
+  const handleY = PAD + (1 - Math.max(0, Math.min(1, res))) * (VIZ_H - PAD * 2);
 
   return (
     <View>
@@ -116,7 +161,20 @@ export function FilterViz({ fx, color, onChange }) {
 }
 
 // ── EQ: combined 3-band curve + draggable band handles ──────────
-export function EqViz({ values, color, onChange }) {
+export function EqViz({ values: stored, color, onChange }) {
+  // The band is picked where the finger lands and stays picked for the whole
+  // drag — sliding sideways no longer jumps to a neighbouring band
+  const band = useRef('eqMid');
+  const { gesture: pan, live } = useGraphDrag(onChange, (x, y, first) => {
+    if (first) {
+      const thirds = (VIZ_W - PAD * 2) / 3;
+      band.current = x < PAD + thirds ? 'eqLow' : x < PAD + thirds * 2 ? 'eqMid' : 'eqHigh';
+    }
+    const db = ((VIZ_H / 2 - y) / (VIZ_H / 2 - PAD)) * 18;
+    const v = Math.max(-1, Math.min(1, db / EQ_RANGE_DB));
+    return { [band.current]: Math.round(v * 100) / 100 };
+  });
+  const values = live ? { ...stored, ...live } : stored;
   const { path, handles } = useMemo(() => {
     const stages = [
       biquadCoeffs('lowshelf', EQ_BANDS.low.freq, 0.707, eqGainDb(values.eqLow)),
@@ -131,17 +189,6 @@ export function EqViz({ values, color, onChange }) {
     return { path: curvePath(responseCurveDb(stages)), handles: h };
   }, [values.eqLow, values.eqMid, values.eqHigh]);
 
-  const emit = useStableChange(onChange);
-  const pan = useMemo(() => Gesture.Pan()
-    .runOnJS(true)
-    .onUpdate((e) => {
-      // Nearest band by x, gain by y
-      const thirds = (VIZ_W - PAD * 2) / 3;
-      const key = e.x < PAD + thirds ? 'eqLow' : e.x < PAD + thirds * 2 ? 'eqMid' : 'eqHigh';
-      const db = ((VIZ_H / 2 - e.y) / (VIZ_H / 2 - PAD)) * 18;
-      const v = Math.max(-1, Math.min(1, db / EQ_RANGE_DB));
-      emit({ [key]: Math.round(v * 100) / 100 });
-    }), []);
 
   return (
     <View>
@@ -197,7 +244,13 @@ export function DriveViz({ drive, color }) {
 }
 
 // ── Echo: ping-pong tap pattern, draggable (x = time, y = feedback) ──
-export function EchoViz({ send, time, feedback, color, onChange }) {
+export function EchoViz({ send, time: storedTime, feedback: storedFb, color, onChange }) {
+  const { gesture: pan, live } = useGraphDrag(onChange, (x, y) => ({
+    delayTime: Math.round((0.05 + xToNorm(x) * 0.65) * 100) / 100,
+    delayFeedback: Math.round(Math.max(0, Math.min(0.85, 1 - (y - PAD) / (VIZ_H - PAD * 2))) * 100) / 100,
+  }));
+  const time = live ? live.delayTime : storedTime;
+  const feedback = live ? live.delayFeedback : storedFb;
   const taps = useMemo(() => {
     const out = [];
     let g = Math.max(0.05, send);
@@ -212,14 +265,6 @@ export function EchoViz({ send, time, feedback, color, onChange }) {
     return out;
   }, [send, time, feedback]);
 
-  const emit = useStableChange(onChange);
-  const pan = useMemo(() => Gesture.Pan()
-    .runOnJS(true)
-    .onUpdate((e) => {
-      const t = 0.05 + xToNorm(e.x) * 0.65;
-      const fb = Math.max(0, Math.min(0.85, 1 - (e.y - PAD) / (VIZ_H - PAD * 2)));
-      emit({ delayTime: Math.round(t * 100) / 100, delayFeedback: Math.round(fb * 100) / 100 });
-    }), []);
 
   return (
     <View>

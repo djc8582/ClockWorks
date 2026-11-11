@@ -5,13 +5,13 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet, Modal } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import Slider from '@react-native-community/slider';
+import Slider from './SmoothSlider.js';
 import { COLORS, UI, FILTER_TYPES, makeDefaultFx, makeDefaultMasterFx } from '../constants.js';
 import { useStore } from '../hooks/useStore.js';
 import { updateState } from '../state.js';
 import { setShapeFx, setMasterFx } from '../audio/audioEngine.js';
 import { cutoffToHz } from '../audio/dsp.js';
-import { FilterViz, EqViz, DriveViz, EchoViz, ReverbViz } from './FxViz.js';
+import { FilterViz, EqViz, DriveViz, EchoViz, ReverbViz, FxDragContext } from './FxViz.js';
 
 function hzLabel(norm) {
   const hz = cutoffToHz(norm);
@@ -86,6 +86,8 @@ function eqSummary(v) {
 
 export default function EffectsPanel() {
   const [open, setOpen] = useState('eq');
+  // A finger on an FX graph freezes the panel's scroll so the drag edits the graph
+  const [graphDrag, setGraphDrag] = useState(false);
   const fxPanel = useStore(s => s.ui.fxPanel || null);
   const bpm = useStore(s => s.bpm);
 
@@ -129,7 +131,8 @@ export default function EffectsPanel() {
       <Pressable style={styles.backdrop} onPress={onClose}>
         <View style={styles.panel} onStartShouldSetResponder={() => true}>
           <Text style={styles.title}>{isMaster ? 'Master Effects' : 'Track Effects'}</Text>
-          <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+          <FxDragContext.Provider value={setGraphDrag}>
+          <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} scrollEnabled={!graphDrag}>
 
             {/* EQ — both track and master */}
             <EffectCard
@@ -259,6 +262,7 @@ export default function EffectsPanel() {
               </>
             )}
           </ScrollView>
+          </FxDragContext.Provider>
           <Pressable style={[styles.doneBtn, { backgroundColor: accent }]} onPress={onClose}>
             <Text style={styles.doneText}>Done</Text>
           </Pressable>

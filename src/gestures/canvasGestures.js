@@ -96,12 +96,19 @@ function handleTap(x, y, centerX, centerY, maxRadius, minRadius) {
   }
 }
 
+// Pinch events arrive faster than the screen refreshes; every updateState
+// re-renders the app, so apply at most one zoom per frame (the latest)
+let pendingZoom = null;
+let zoomFrame = null;
 function handlePinchUpdate(scale, startZoom) {
-  updateState(s => {
-    s.ui.canvasZoom = Math.max(
-      DIMENSIONS.canvasZoomMin,
-      Math.min(DIMENSIONS.canvasZoomMax, startZoom * scale)
-    );
+  pendingZoom = Math.max(DIMENSIONS.canvasZoomMin, Math.min(DIMENSIONS.canvasZoomMax, startZoom * scale));
+  if (zoomFrame !== null) return;
+  zoomFrame = requestAnimationFrame(() => {
+    zoomFrame = null;
+    const z = pendingZoom;
+    pendingZoom = null;
+    if (z === null || Math.abs(z - (getState().ui.canvasZoom || 1)) < 0.002) return;
+    updateState(s => { s.ui.canvasZoom = z; });
   });
 }
 

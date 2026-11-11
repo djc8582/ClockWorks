@@ -112,6 +112,25 @@ export const PITCH = {
   defaultVelocity: 85,
 };
 
+// ── Piano roll (drawn in one Skia picture — see src/ui/rollGeometry.js) ──
+export const ROLL = {
+  labelW: 42,          // melodic note-name column
+  drumLabelW: 70,      // drum slot-name column
+  headerH: 44,         // melodic step numbers + mute dots
+  drumHeaderH: 36,
+  cellH: 28,           // melodic row height at zoom 1
+  minCellH: 14,
+  drumCellH: 48,
+  minCellW: 20,        // a step never gets narrower than this
+  zoomHMin: 1, zoomHMax: 4,
+  zoomVMin: 0.6, zoomVMax: 3,
+  tapSlop: 10,         // px a finger may move and still count as a tap
+  panMinDistance: 6,
+  muteDot: 11,
+  drumDot: 24,
+  overscroll: 60,      // rubber-band reach past an edge (px)
+};
+
 export const MAX_SHAPES = 20;
 export const MAX_SCENES = 8;
 export const MIN_SIDES = 2;

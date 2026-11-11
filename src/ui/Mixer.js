@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native';
-import Slider from '@react-native-community/slider';
+import Slider from './SmoothSlider.js';
 import { COLORS, UI, TIMBRES, makeDefaultFx } from '../constants.js';
 import { updateState } from '../state.js';
 import { editLayerAll } from '../looper.js';

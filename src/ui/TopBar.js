@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, Pressable, Modal, ScrollView, TextInput, StyleSheet } from 'react-native';
-import Slider from '@react-native-community/slider';
+import Slider from './SmoothSlider.js';
 import { COLORS, UI } from '../constants.js';
 import { updateState, getState, initState } from '../state.js';
 import { updateCycleDuration, rescheduleAll } from '../audio/audioEngine.js';
